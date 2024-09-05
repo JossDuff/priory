@@ -1,0 +1,26 @@
+[package]
+name = "priory"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1.40.0", features = ["full"] }
+async-trait = "0.1.82"
+futures = "0.3.30"
+libp2p = { version = "0.54.1", features = [
+	"tokio",
+	"gossipsub",
+	"mdns",
+	"noise",
+	"macros",
+	"tcp",
+	"yamux",
+	"quic",
+	"upnp",
+] }
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+
+[dependencies.libp2p-gossipsub]
+version = "0.47.0"
