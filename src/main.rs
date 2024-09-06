@@ -1,5 +1,13 @@
 use futures::stream::StreamExt;
-use libp2p::{gossipsub, mdns, noise, swarm::NetworkBehaviour, swarm::SwarmEvent, tcp, yamux};
+use libp2p::kad;
+use libp2p::{
+    gossipsub,
+    kad::{store::MemoryStore, Mode},
+    mdns, noise,
+    swarm::NetworkBehaviour,
+    swarm::SwarmEvent,
+    tcp, yamux, PeerId,
+};
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
 use std::hash::{Hash, Hasher};
@@ -13,6 +21,7 @@ use tracing_subscriber::EnvFilter;
 struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
     mdns: mdns::tokio::Behaviour,
+    kademlia: kad::Behaviour<MemoryStore>,
 }
 
 #[tokio::main]
@@ -54,7 +63,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             let mdns =
                 mdns::tokio::Behaviour::new(mdns::Config::default(), key.public().to_peer_id())?;
-            Ok(MyBehaviour { gossipsub, mdns })
+
+            let kademlia = kad::Behaviour::new(
+                key.public().to_peer_id(),
+                MemoryStore::new(key.public().to_peer_id()),
+            );
+
+            Ok(MyBehaviour {
+                gossipsub,
+                mdns,
+                kademlia,
+            })
         })?
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
@@ -71,15 +90,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
     swarm.listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse()?)?;
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
-    println!("Enter messages via STDIN and they will be sent to connected peers using Gossipsub\n");
+    println!("Enter messages via STDIN and they will be sent to connected peers using Gossipsub");
+    println!("To bootstrap Kademlia, type '/bootstrap <multiaddr of external peer>'\n");
 
     // let it rip
     loop {
         select! {
             Ok(Some(line)) = stdin.next_line() => {
-                let line = format!("{username}: {line}");
-                if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), line.as_bytes()) {
-                    println!("Publish error: {e:?}");
+                if line.starts_with("/bootstrap ") {
+                    let addr: libp2p::Multiaddr = line[10..].parse()?;
+                    // TODO: I don't think this should be PeerId::random()
+                    // actually, PeerId::random() can be used for randomly walking a DHT so maybe
+                    // this will be okay
+                    swarm.behaviour_mut().kademlia.add_address(&PeerId::random(), addr);
+                    swarm.behaviour_mut().kademlia.bootstrap()?;
+                    println!("Congression successful");
+                } else {
+                    let line = format!("{username}: {line}");
+                    if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), line.as_bytes()) {
+                        println!("Publish error: {e:?}");
+                    }
                 }
             }
             event = swarm.select_next_some() => match event {
@@ -96,8 +126,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
-                    propagation_source: peer_id,
-                    message_id: id,
+                    propagation_source: _peer_id,
+                    message_id: _id,
                     message,
                 })) => println!(
                         // "Got message: '{}' with id: {id} from peer: {peer_id}",
@@ -106,6 +136,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     ),
                 SwarmEvent::NewListenAddr {address, ..} => {
                     // println!("Local node is listening on {address}");
+                }
+                SwarmEvent::Behaviour(MyBehaviourEvent::Kademlia(kad::Event::OutboundQueryProgressed{
+                    result: kad::QueryResult::GetClosestPeers(Ok(kad::GetClosestPeersOk{key, peers})),
+                    ..
+                })) => {
+                    // println!("Closest peers to {:?}: {}", key, peers.join(", "));
                 }
                 _ => {}
             }
@@ -120,6 +156,8 @@ fn prompt_username() -> String {
 
     let mut name = String::new();
     std::io::stdin().read_line(&mut name).unwrap();
+
+    println!("");
 
     name.trim().to_string()
 }
