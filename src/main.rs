@@ -141,6 +141,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     result: kad::QueryResult::GetClosestPeers(Ok(kad::GetClosestPeersOk{key, peers})),
                     ..
                 })) => {
+                    // TODO: are these newly discovered peers?  Should they be added to the
+                    // gossipsub??
                     // println!("Closest peers to {:?}: {}", key, peers.join(", "));
                 }
                 _ => {}
