@@ -1,8 +1,19 @@
+/**
+
+provide a bootstrap multiaddress (ipv4) to dial
+Then on connection add everything to kademlia DHT
+Need to know all the types of connection behaviour
+
+**/
 use clap::Parser;
 use futures::{executor::block_on, future::FutureExt, stream::StreamExt};
+use libp2p::core::ConnectedPoint;
 use libp2p::kad;
 use libp2p::{
-    core::multiaddr::{Multiaddr, Protocol},
+    core::{
+        multiaddr::{Multiaddr, Protocol},
+        Endpoint,
+    },
     dcutr, gossipsub, identify, identity,
     kad::store::MemoryStore,
     mdns, noise, ping, relay,
@@ -23,38 +34,13 @@ use tracing_subscriber::EnvFilter;
 #[derive(Debug, Parser)]
 #[clap(name = "libp2p DCUtR client")]
 struct Opts {
-    /// The mode (client-listen, client-dial).
-    #[clap(long)]
-    mode: Mode,
-
     /// Fixed value to generate deterministic peer id.
     #[clap(long)]
     secret_key_seed: u8,
 
-    /// The listening address
+    /// use this node to bootstrap kademlia DHT
     #[clap(long)]
-    relay_address: Multiaddr,
-
-    /// Peer ID of the remote peer to hole punch to.
-    #[clap(long)]
-    remote_peer_id: Option<PeerId>,
-}
-
-#[derive(Clone, Debug, PartialEq, Parser)]
-enum Mode {
-    Dial,
-    Listen,
-}
-
-impl FromStr for Mode {
-    type Err = String;
-    fn from_str(mode: &str) -> Result<Self, Self::Err> {
-        match mode {
-            "dial" => Ok(Mode::Dial),
-            "listen" => Ok(Mode::Listen),
-            _ => Err("Expected either 'dial' or 'listen'".to_string()),
-        }
-    }
+    bootstrap_node: Multiaddr,
 }
 
 // custom network behavious that combines gossipsub and mdns
@@ -160,61 +146,50 @@ async fn main() -> Result<(), Box<dyn Error>> {
     swarm.listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse()?)?;
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
-    // Wait to listen on all interfaces.
-    // TODO: not sure if this is necessary.  It isn't included in other examples
-    block_on(async {
-        let mut delay = futures_timer::Delay::new(std::time::Duration::from_secs(1)).fuse();
-        loop {
-            futures::select! {
-                event = swarm.next() => {
-                    match event.unwrap() {
-                        SwarmEvent::NewListenAddr { address, .. } => {
-                            tracing::info!(%address, "Listening on address");
-                        }
-                        event => panic!("{event:?}"),
-                    }
-                }
-                _ = delay => {
-                    // Likely listening on all interfaces now, thus continuing by breaking the loop.
-                    break;
-                }
-            }
-        }
-    });
+    // try to dial a mfer
+    // TODO: if connection is successful add the node to the kademlia DHT
+    swarm.dial(opts.bootstrap_node)?;
 
     println!("Enter messages via STDIN and they will be sent to connected peers using Gossipsub");
-    println!("To bootstrap Kademlia, type '/bootstrap <multiaddr of external peer>'\n");
 
     // let it rip
     loop {
         select! {
             Ok(Some(line)) = stdin.next_line() => {
-                if line.starts_with("/bootstrap ") {
-                    let addr: libp2p::Multiaddr = line[10..].parse()?;
-                    // TODO: I don't think this should be PeerId::random()
-                    // actually, PeerId::random() can be used for randomly walking a DHT so maybe
-                    // this will be okay
-                    swarm.behaviour_mut().kademlia.add_address(&PeerId::random(), addr);
-                    swarm.behaviour_mut().kademlia.bootstrap()?;
-                    println!("Congression successful");
-                } else {
-                    let line = format!("{username}: {line}");
-                    if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), line.as_bytes()) {
-                        println!("Publish error: {e:?}");
-                    }
+                // if line.starts_with("/bootstrap ") {
+                //     let addr: libp2p::Multiaddr = line[10..].parse()?;
+                //     // TODO: I don't think this should be PeerId::random()
+                //     // actually, PeerId::random() can be used for randomly walking a DHT so maybe
+                //     // this will be okay
+                //     swarm.behaviour_mut().kademlia.add_address(&PeerId::random(), addr);
+                //     swarm.behaviour_mut().kademlia.bootstrap()?;
+                //     println!("Congression successful");
+                // } else {
+                let line = format!("{username}: {line}");
+                if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), line.as_bytes()) {
+                    println!("Publish error: {e:?}");
                 }
             }
             event = swarm.select_next_some() => match event {
+                // when someone dials this node (we are the listener), add them to the DHT
+                SwarmEvent::ConnectionEstablished{peer_id, endpoint: ConnectedPoint::Listener {send_back_addr, ..}, ..} => {
+
+                    // I think this is the node we attempted to dial earlier
+                    swarm.behaviour_mut().kademlia.add_address(&peer_id, send_back_addr);
+
+                }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
-                    for (peer_id, _multiaddr) in list {
+                    for (peer_id, multiaddr) in list {
                         // println!("mDNS discovered a new peer: {peer_id}");
                         swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                        swarm.behaviour_mut().kademlia.add_address(&peer_id, multiaddr);
                     }
                 },
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
-                    for (peer_id, _multiaddr) in list {
+                    for (peer_id, multiaddr) in list {
                         // println!("mDNS discovered peer has expired: {peer_id}");
                         swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
+                        swarm.behaviour_mut().kademlia.remove_address(&peer_id, &multiaddr);
                     }
                 }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
@@ -237,6 +212,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     // gossipsub??
                     // println!("Closest peers to {:?}: {}", key, peers.join(", "));
                 }
+                // TODO: in dcutr example the program blocks until it has both learned and told an
+                // address.  Is probably just a result of the tutorial
                 SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {..})) => {
                     // tracing::info!("Told relay its public address");
                 }
