@@ -19,9 +19,17 @@ libp2p = { version = "0.54.1", features = [
 	"quic",
 	"upnp",
 	"kad",
+	"ping",
+	"dcutr",
+	"dns",
+	"identify",
+	"relay",
 ] }
+
+futures-timer = "3.0"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+clap = { version = "4.5.6", features = ["derive"] }
 
 [dependencies.libp2p-gossipsub]
 version = "0.47.0"
