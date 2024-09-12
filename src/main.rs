@@ -1,10 +1,3 @@
-/**
-
-provide a bootstrap multiaddress (ipv4) to dial
-Then on connection add everything to kademlia DHT
-Need to know all the types of connection behaviour
-
-**/
 use clap::Parser;
 use futures::{executor::block_on, future::FutureExt, stream::StreamExt};
 use libp2p::core::ConnectedPoint;
@@ -36,7 +29,7 @@ use tracing_subscriber::EnvFilter;
 struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
     mdns: mdns::tokio::Behaviour,
-    kademlia: kad::Behaviour<MemoryStore>,
+    // kademlia: kad::Behaviour<MemoryStore>,
     // from dcutr example
     // relay_client: relay::client::Behaviour,
     // ping: ping::Behaviour,
@@ -90,10 +83,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 keypair.public().to_peer_id(),
             )?;
 
-            let kademlia = kad::Behaviour::new(
-                keypair.public().to_peer_id(),
-                MemoryStore::new(keypair.public().to_peer_id()),
-            );
+            // let kademlia = kad::Behaviour::new(
+            //     keypair.public().to_peer_id(),
+            //     MemoryStore::new(keypair.public().to_peer_id()),
+            // );
             //
             // let relay_client = relay_behaviour;
             //
@@ -109,7 +102,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Ok(MyBehaviour {
                 gossipsub,
                 mdns,
-                kademlia,
+                // kademlia,
                 // relay_client,
                 // ping,
                 // identify,
@@ -132,7 +125,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
     println!("Enter messages via STDIN and they will be sent to connected peers using Gossipsub");
-    println!("To bootstrap Kademlia, type '/bootstrap <multiaddr of external peer>'\n");
+    println!("To bootstrap, type '/bootstrap <multiaddr of external peer>'\n");
 
     // let it rip
     loop {
@@ -175,7 +168,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
                     warn!("Connection to {peer_id} closed: {cause:?}");
-                    swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
+                    // swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
                     info!("Removed {peer_id} from the routing table (if it was in there).");
                 }
 
