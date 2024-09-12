@@ -28,6 +28,7 @@ use std::io::Write;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::{io, io::AsyncBufReadExt, select};
+use tracing::{debug, error, info, trace, warn};
 use tracing_subscriber::EnvFilter;
 
 // custom network behavious that combines gossipsub and mdns
@@ -35,7 +36,7 @@ use tracing_subscriber::EnvFilter;
 struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
     mdns: mdns::tokio::Behaviour,
-    // kademlia: kad::Behaviour<MemoryStore>,
+    kademlia: kad::Behaviour<MemoryStore>,
     // from dcutr example
     // relay_client: relay::client::Behaviour,
     // ping: ping::Behaviour,
@@ -89,10 +90,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 keypair.public().to_peer_id(),
             )?;
 
-            // let kademlia = kad::Behaviour::new(
-            //     keypair.public().to_peer_id(),
-            //     MemoryStore::new(keypair.public().to_peer_id()),
-            // );
+            let kademlia = kad::Behaviour::new(
+                keypair.public().to_peer_id(),
+                MemoryStore::new(keypair.public().to_peer_id()),
+            );
             //
             // let relay_client = relay_behaviour;
             //
@@ -108,7 +109,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Ok(MyBehaviour {
                 gossipsub,
                 mdns,
-                // kademlia,
+                kademlia,
                 // relay_client,
                 // ping,
                 // identify,
@@ -131,88 +132,103 @@ async fn main() -> Result<(), Box<dyn Error>> {
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
     println!("Enter messages via STDIN and they will be sent to connected peers using Gossipsub");
-    // println!("To bootstrap Kademlia, type '/bootstrap <multiaddr of external peer>'\n");
+    println!("To bootstrap Kademlia, type '/bootstrap <multiaddr of external peer>'\n");
 
     // let it rip
     loop {
         select! {
-                    Ok(Some(line)) = stdin.next_line() => {
-                        if line.starts_with("/bootstrap ") {
-                            let addr: libp2p::Multiaddr = line[10..].parse()?;
-                            swarm.dial(addr)?;
+            Ok(Some(line)) = stdin.next_line() => {
+             if let Some(addr) = line.strip_prefix("/bootstrap ") {
+                    let addr: libp2p::Multiaddr = addr.parse()?;
+                    swarm.dial(addr.clone())?;
 
-                            // TODO: I don't think this should be PeerId::random()
-                            // actually, PeerId::random() can be used for randomly walking a DHT so maybe
-                            // this will be okay
+                    // TODO: I don't think this should be PeerId::random()
+                    // actually, PeerId::random() can be used for randomly walking a DHT so maybe
+                    // this will be okay.
+                    // Or maybe we should be using the identity protocol to learn the actual
+                    // peerid?
 
-                            // swarm.behaviour_mut().kademlia.add_address(&PeerId::random(), addr);
-                            // swarm.behaviour_mut().kademlia.bootstrap()?;
-                            // println!("Congression successful");
-                        } else {
-                            let line = format!("{username}: {line}");
-                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), line.as_bytes()) {
-                                println!("Publish error: {e:?}");
-                            }
-                        }
+                    // swarm.behaviour_mut().kademlia.add_address(&PeerId::random(), addr.clone());
+                    // swarm.behaviour_mut().kademlia.bootstrap()?;
+                    info!("bootstrapped with address {}", addr);
+                } else {
+                    let line = format!("{username}: {line}");
+                    if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), line.as_bytes()) {
+                        warn!("Publish error: {e:?}");
                     }
-                    event = swarm.select_next_some() => match event {
-                        // when someone dials this node (we are the listener), add them to the DHT
-                        SwarmEvent::ConnectionEstablished{peer_id, endpoint: ConnectedPoint::Listener {send_back_addr, ..}, ..} => {
-
-                            // I think this is the node we attempted to dial earlier
-                            // swarm.behaviour_mut().kademlia.add_address(&peer_id, send_back_addr);
-
-                        }
-                        SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
-                            for (peer_id, multiaddr) in list {
-                                // println!("mDNS discovered a new peer: {peer_id}");
-                                swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                                // swarm.behaviour_mut().kademlia.add_address(&peer_id, multiaddr);
-                            }
-                        },
-                        SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
-                            for (peer_id, multiaddr) in list {
-                                // println!("mDNS discovered peer has expired: {peer_id}");
-                                swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
-                                // swarm.behaviour_mut().kademlia.remove_address(&peer_id, &multiaddr);
-                            }
-                        }
-                        SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
-                            propagation_source: _peer_id,
-                            message_id: _id,
-                            message,
-                        })) => println!(
-                                // "Got message: '{}' with id: {id} from peer: {peer_id}",
-                                "{}",
-                                String::from_utf8_lossy(&message.data),
-                            ),
-                        SwarmEvent::NewListenAddr { ..} => {
-                            // println!("Local node is listening on {address}");
-                        }
-                        /**
-                        SwarmEvent::Behaviour(MyBehaviourEvent::Kademlia(kad::Event::OutboundQueryProgressed{
-                            result: kad::QueryResult::GetClosestPeers(Ok(kad::GetClosestPeersOk{key, peers})),
-                            ..
-                        })) => {
-                            // TODO: are these newly discovered peers?  Should they be added to the
-                            // gossipsub??
-                            // println!("Closest peers to {:?}: {}", key, peers.join(", "));
-                        }
-                        // TODO: in dcutr example the program blocks until it has both learned and told an
-                        // address.  Is probably just a result of the tutorial
-                        SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {..})) => {
-                            // tracing::info!("Told relay its public address");
-                        }
-                        SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
-                            info: identify::Info {observed_addr, ..}, ..
-                        })) => {
-                            // tracing::info!(address=%observed_addr, "Relay told us our observed address");
-                        }
-        **/
-                        _ => {}
-                    }
-
                 }
+            }
+            event = swarm.select_next_some() => match event {
+                SwarmEvent::NewListenAddr { address, .. } => {
+
+                    let p2p_address = address.with(Protocol::P2p(*swarm.local_peer_id()));
+                    info!("Listening on {p2p_address}");
+                }
+                SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                    info!("Connected to {peer_id}");
+                }
+                SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                    warn!("Failed to dial {peer_id:?}: {error}");
+                }
+                SwarmEvent::IncomingConnectionError { error, .. } => {
+                    warn!("{:#}", anyhow::Error::from(error))
+                }
+                SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                    warn!("Connection to {peer_id} closed: {cause:?}");
+                    swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
+                    info!("Removed {peer_id} from the routing table (if it was in there).");
+                }
+
+                SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
+                    for (peer_id, multiaddr) in list {
+                        // println!("mDNS discovered a new peer: {peer_id}");
+                        swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                        // swarm.behaviour_mut().kademlia.add_address(&peer_id, multiaddr);
+                    }
+                },
+                SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
+                    for (peer_id, multiaddr) in list {
+                        // println!("mDNS discovered peer has expired: {peer_id}");
+                        swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
+                        // swarm.behaviour_mut().kademlia.remove_address(&peer_id, &multiaddr);
+                    }
+                }
+                SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
+                    propagation_source: _peer_id,
+                    message_id: _id,
+                    message,
+                })) => println!(
+                        // "Got message: '{}' with id: {id} from peer: {peer_id}",
+                        "{}",
+                        String::from_utf8_lossy(&message.data),
+                    ),
+                SwarmEvent::NewListenAddr { ..} => {
+                    // println!("Local node is listening on {address}");
+                }
+                /**
+                SwarmEvent::Behaviour(MyBehaviourEvent::Kademlia(kad::Event::OutboundQueryProgressed{
+                    result: kad::QueryResult::GetClosestPeers(Ok(kad::GetClosestPeersOk{key, peers})),
+                    ..
+                })) => {
+                    // TODO: are these newly discovered peers?  Should they be added to the
+                    // gossipsub??
+                    // println!("Closest peers to {:?}: {}", key, peers.join(", "));
+                }
+                // TODO: in dcutr example the program blocks until it has both learned and told an
+                // address.  Is probably just a result of the tutorial
+                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {..})) => {
+                    // tracing::info!("Told relay its public address");
+                }
+                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
+                    info: identify::Info {observed_addr, ..}, ..
+                })) => {
+                    // tracing::info!(address=%observed_addr, "Relay told us our observed address");
+                }
+                **/
+                _ => {}
+            }
+
+        }
     }
 }
 
@@ -223,14 +239,14 @@ fn prompt_username() -> String {
     let mut name = String::new();
     std::io::stdin().read_line(&mut name).unwrap();
 
-    println!("");
+    println!();
 
     name.trim().to_string()
 }
 
-fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
-    let mut bytes = [0u8; 32];
-    bytes[0] = secret_key_seed;
-
-    identity::Keypair::ed25519_from_bytes(bytes).expect("only errors on wrong length")
-}
+// fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
+//     let mut bytes = [0u8; 32];
+//     bytes[0] = secret_key_seed;
+//
+//     identity::Keypair::ed25519_from_bytes(bytes).expect("only errors on wrong length")
+// }
