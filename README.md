@@ -3,5 +3,5 @@
 A peer to peer chat room
 
 ```bash
-docker compose up --build
+RUST_LOG=info cargo run -- --relay-address <Multiaddr>
 ```
