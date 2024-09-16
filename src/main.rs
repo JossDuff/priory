@@ -10,17 +10,10 @@ TODO:
 
 
 **/
-use futures::{executor::block_on, future::FutureExt, stream::StreamExt};
-use libp2p::core::ConnectedPoint;
-use libp2p::kad;
+use futures::{executor::block_on, stream::StreamExt};
 use libp2p::{
-    core::{
-        multiaddr::{Multiaddr, Protocol},
-        Endpoint,
-    },
-    dcutr, gossipsub, identify, identity,
-    kad::store::MemoryStore,
-    mdns, noise, ping, relay,
+    core::multiaddr::{Multiaddr, Protocol},
+    dcutr, gossipsub, identify, identity, mdns, noise, relay,
     swarm::NetworkBehaviour,
     swarm::SwarmEvent,
     tcp, yamux, PeerId,
@@ -30,10 +23,9 @@ use std::error::Error;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::net::Ipv4Addr;
-use std::str::FromStr;
 use std::time::Duration;
 use tokio::{io, io::AsyncBufReadExt, select};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 mod config;
@@ -57,9 +49,8 @@ struct MyBehaviour {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let username = prompt_username();
-
     let cfg = Config::parse();
+    let username = prompt_username();
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
@@ -104,11 +95,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 keypair.public().to_peer_id(),
             )?;
 
-            // let kademlia = kad::Behaviour::new(
-            //     keypair.public().to_peer_id(),
-            //     MemoryStore::new(keypair.public().to_peer_id()),
-            // );
-            //
             let relay_client = relay_behaviour;
 
             let relay = relay::Behaviour::new(keypair.public().to_peer_id(), Default::default());
@@ -152,39 +138,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with(Protocol::QuicV1);
     swarm.listen_on(listen_addr_quic)?;
 
-    // Wait to listen on all interfaces.
-    // block_on(async {
-    //     let mut delay = futures_timer::Delay::new(std::time::Duration::from_secs(1)).fuse();
-    //     loop {
-    //         futures::select! {
-    //             event = swarm.next() => {
-    //                 match event.unwrap() {
-    //                     SwarmEvent::NewListenAddr { address, .. } => {
-    //                         tracing::info!(%address, "Listening on address");
-    //                     }
-    //                     event => panic!("{event:?}"),
-    //                 }
-    //             }
-    //             _ = delay => {
-    //                 // Likely listening on all interfaces now, thus continuing by breaking the loop.
-    //                 break;
-    //             }
-    //         }
-    //     }
-    // });
-    // if let Some(relay_address) = cfg.relay_address.clone() {
-    //     swarm.dial(relay_address.clone())?;
-    //     swarm
-    //         .listen_on(relay_address.with(Protocol::P2pCircuit))
-    //         .unwrap();
-    // }
-
     // Connect to the relay server. Not for the reservation or relayed connection, but to (a) learn
     // our local public address and (b) enable a freshly started relay to learn its public address.
     if let Some(relay_address) = cfg.relay_address.clone() {
         swarm.dial(relay_address.clone()).unwrap();
-        // @Tim: why is this necessary?  We can't just wait 2 seconds
-        // A: we need to know our external IP so we can tell the other node who to holepunch to
+        // we need to know our external IP so we can tell the other node who to holepunch to
         block_on(async {
             let mut learned_observed_addr = false;
             let mut told_relay_observed_addr = false;
@@ -324,29 +282,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         "{}",
                         String::from_utf8_lossy(&message.data),
                     ),
-                SwarmEvent::NewListenAddr { ..} => {
-                    // println!("Local node is listening on {address}");
-                }
-                /**
-                SwarmEvent::Behaviour(MyBehaviourEvent::Kademlia(kad::Event::OutboundQueryProgressed{
-                    result: kad::QueryResult::GetClosestPeers(Ok(kad::GetClosestPeersOk{key, peers})),
-                    ..
-                })) => {
-                    // TODO: are these newly discovered peers?  Should they be added to the
-                    // gossipsub??
-                    // println!("Closest peers to {:?}: {}", key, peers.join(", "));
-                }
-                // TODO: in dcutr example the program blocks until it has both learned and told an
-                // address.  Is probably just a result of the tutorial
-                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {..})) => {
-                    // info!("Told relay its public address");
-                }
-                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
-                    info: identify::Info {observed_addr, ..}, ..
-                })) => {
-                    // info!(address=%observed_addr, "Relay told us our observed address");
-                }
-                **/
                 _ => {}
             }
 
