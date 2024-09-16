@@ -3,6 +3,9 @@
 TODO:
 
 [] specify peering degree.  You should be able to connect to only your nodes if you want.  If you have peering degree of 0 your node should still work
+[] relay in here.  Do you want to be a relay y/n
+[] directly dialing people on dns
+[] automatically discovering peers via holepunching
 
 
 **/
@@ -26,6 +29,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
+use std::net::Ipv4Addr;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::{io, io::AsyncBufReadExt, select};
@@ -35,11 +39,23 @@ use tracing_subscriber::EnvFilter;
 // TODO: clap to pass in relay address as an option (only use if we're holepunching)
 #[derive(Debug, Parser)]
 struct Opts {
-    /// If attempting to holepunch, this address will be used as the relay.  Only needed for the
-    /// listening side of the hole punch
-    // @Tim this will crash if we're gonna connect via mDns but supply a relay_address
+    /// If attempting to holepunch, this address will be used as the relay.  
     #[clap(long)]
     relay_address: Option<Multiaddr>,
+
+    // TODO:
+    /// specify whether or not you will be a relay node for others.  This requires your node is
+    /// publically accessible.
+    // #[clap(long)]
+    // is_relay: bool,
+
+    /// Fixed value to generate deterministic peer id
+    #[clap(long)]
+    secret_key_seed: u8,
+
+    /// The port used to listen on all interfaces
+    #[clap(long, default_value = "0")]
+    port: u16,
 }
 
 // custom network behavious that combines gossipsub and mdns
@@ -49,8 +65,10 @@ struct MyBehaviour {
     mdns: mdns::tokio::Behaviour,
     // kademlia: kad::Behaviour<MemoryStore>,
     relay_client: relay::client::Behaviour,
+    // relay server for routing messages
+    relay: relay::Behaviour,
     // ping: ping::Behaviour,
-    // // for learning our own addr and telling other nodes their addr
+    // for learning our own addr and telling other nodes their addr
     identify: identify::Behaviour,
     // hole punching
     dcutr: dcutr::Behaviour,
@@ -66,7 +84,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_env_filter(EnvFilter::from_default_env())
         .try_init();
 
-    let mut swarm = libp2p::SwarmBuilder::with_new_identity()
+    // deterministically generate a PeerId based on given seed for development ease.
+    let local_key: identity::Keypair = generate_ed25519(opts.secret_key_seed);
+
+    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
         .with_tokio()
         .with_tcp(
             tcp::Config::default(),
@@ -108,22 +129,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
             // );
             //
             let relay_client = relay_behaviour;
-            //
-            // let ping = ping::Behaviour::new(ping::Config::new());
-            //
+
+            let relay = relay::Behaviour::new(keypair.public().to_peer_id(), Default::default());
+
             let identify = identify::Behaviour::new(identify::Config::new(
                 "TODO/0.0.1".to_string(),
                 keypair.public(),
             ));
-            //
+
             let dcutr = dcutr::Behaviour::new(keypair.public().to_peer_id());
-            //
+
             Ok(MyBehaviour {
                 gossipsub,
                 mdns,
-                // kademlia,
                 relay_client,
-                // ping,
+                relay,
                 identify,
                 dcutr,
             })
@@ -139,9 +159,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // read full lines from stdin
     let mut stdin = io::BufReader::new(io::stdin()).lines();
 
-    // Listen on all interfaces and whatever port the OS assigns
-    swarm.listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse()?)?;
-    swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
+    // Listen on all interfaces and the specified port
+    let listen_addr_tcp = Multiaddr::empty()
+        .with(Protocol::from(Ipv4Addr::UNSPECIFIED))
+        .with(Protocol::Tcp(opts.port));
+    swarm.listen_on(listen_addr_tcp)?;
+
+    let listen_addr_quic = Multiaddr::empty()
+        .with(Protocol::from(Ipv4Addr::UNSPECIFIED))
+        .with(Protocol::Udp(opts.port))
+        .with(Protocol::QuicV1);
+    swarm.listen_on(listen_addr_quic)?;
 
     // Wait to listen on all interfaces.
     // block_on(async {
@@ -175,19 +203,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if let Some(relay_address) = opts.relay_address.clone() {
         swarm.dial(relay_address.clone()).unwrap();
         // @Tim: why is this necessary?  We can't just wait 2 seconds
+        // A: we need to know our external IP so we can tell the other node who to holepunch to
         block_on(async {
             let mut learned_observed_addr = false;
             let mut told_relay_observed_addr = false;
 
             loop {
                 match swarm.next().await.unwrap() {
-                    SwarmEvent::NewListenAddr { .. } => {}
-                    SwarmEvent::Dialing { .. } => {}
-                    SwarmEvent::ConnectionEstablished { .. } => {
-                        // @Tim this also doesn't work
-                        // Wait until we've dialed
-                        // break;
-                    }
                     SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {
                         ..
                     })) => {
@@ -203,7 +225,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         tracing::info!(address=%observed_addr, "Relay told us our observed address");
                         learned_observed_addr = true;
                     }
-                    event => panic!("{event:?}"),
+                    _ => {}
                 }
 
                 if learned_observed_addr && told_relay_observed_addr {
@@ -229,15 +251,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 if let Some(addr) = line.strip_prefix("/bootstrap ") {
                     let addr: libp2p::Multiaddr = addr.parse()?;
                     swarm.dial(addr.clone())?;
-
-                    // TODO: I don't think this should be PeerId::random()
-                    // actually, PeerId::random() can be used for randomly walking a DHT so maybe
-                    // this will be okay.
-                    // Or maybe we should be using the identity protocol to learn the actual
-                    // peerid?
-
-                    // swarm.behaviour_mut().kademlia.add_address(&PeerId::random(), addr.clone());
-                    // swarm.behaviour_mut().kademlia.bootstrap()?;
                     info!("bootstrapped with address {}", addr);
                 } else if let Some(addr) = line.strip_prefix("/holepunch ") {
                     let remote_peer_id: PeerId = addr.parse()?;
@@ -250,6 +263,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                     };
 
+                    // Q: will gossipsub auto holepunch for us when a new node joins the network?
                     swarm
                         .dial(
                             relay_addr.clone()
@@ -281,7 +295,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
                     warn!("Connection to {peer_id} closed: {cause:?}");
-                    // swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
                     info!("Removed {peer_id} from the routing table (if it was in there).");
                 }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Dcutr(event)) => {
@@ -301,11 +314,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     info: identify::Info { observed_addr, .. },
                     ..
                 })) => {
+                    // relay example has below line:
+                    // swarm.add_external_address(observed_addr.clone());
                     tracing::info!(address=%observed_addr, "Relay told us our observed address");
                 }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, multiaddr) in list {
                         // println!("mDNS discovered a new peer: {peer_id}");
+                        // Explicit peers are peers that remain connected and we unconditionally
+                        // forward messages to, outside of the scoring system.
                         swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                         // swarm.behaviour_mut().kademlia.add_address(&peer_id, multiaddr);
                     }
@@ -368,9 +385,9 @@ fn prompt_username() -> String {
     name.trim().to_string()
 }
 
-// fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
-//     let mut bytes = [0u8; 32];
-//     bytes[0] = secret_key_seed;
-//
-//     identity::Keypair::ed25519_from_bytes(bytes).expect("only errors on wrong length")
-// }
+fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
+    let mut bytes = [0u8; 32];
+    bytes[0] = secret_key_seed;
+
+    identity::Keypair::ed25519_from_bytes(bytes).expect("only errors on wrong length")
+}
