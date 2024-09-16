@@ -36,13 +36,13 @@ use tracing_subscriber::EnvFilter;
 #[derive(Debug, Parser)]
 struct Opts {
     /// The mode (client-listen, client-dial).
-    #[clap(long)]
-    mode: Mode,
+    //    #[clap(long)]
+    //    mode: Mode,
 
     /// If attempting to holepunch, this address will be used as the relay.  Only needed for the
     /// listening side of the hole punch
     #[clap(long)]
-    relay_address: Multiaddr,
+    relay_address: Option<Multiaddr>,
 }
 
 #[derive(Clone, Debug, PartialEq, Parser)]
@@ -192,43 +192,52 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Connect to the relay server. Not for the reservation or relayed connection, but to (a) learn
     // our local public address and (b) enable a freshly started relay to learn its public address.
-    swarm.dial(opts.relay_address.clone()).unwrap();
-    block_on(async {
-        let mut learned_observed_addr = false;
-        let mut told_relay_observed_addr = false;
+    if let Some(relay_address) = opts.relay_address.clone() {
+        swarm.dial(relay_address.clone()).unwrap();
+        block_on(async {
+            let mut learned_observed_addr = false;
+            let mut told_relay_observed_addr = false;
 
-        loop {
-            match swarm.next().await.unwrap() {
-                SwarmEvent::NewListenAddr { .. } => {}
-                SwarmEvent::Dialing { .. } => {}
-                SwarmEvent::ConnectionEstablished { .. } => {}
-                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {
-                    ..
-                })) => {
-                    tracing::info!("Told relay its public address");
-                    told_relay_observed_addr = true;
+            loop {
+                match swarm.next().await.unwrap() {
+                    SwarmEvent::NewListenAddr { .. } => {}
+                    SwarmEvent::Dialing { .. } => {}
+                    SwarmEvent::ConnectionEstablished { .. } => {}
+                    SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {
+                        ..
+                    })) => {
+                        tracing::info!("Told relay its public address");
+                        told_relay_observed_addr = true;
+                    }
+                    SwarmEvent::Behaviour(MyBehaviourEvent::Identify(
+                        identify::Event::Received {
+                            info: identify::Info { observed_addr, .. },
+                            ..
+                        },
+                    )) => {
+                        tracing::info!(address=%observed_addr, "Relay told us our observed address");
+                        learned_observed_addr = true;
+                    }
+                    event => panic!("{event:?}"),
                 }
-                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
-                    info: identify::Info { observed_addr, .. },
-                    ..
-                })) => {
-                    tracing::info!(address=%observed_addr, "Relay told us our observed address");
-                    learned_observed_addr = true;
+
+                if learned_observed_addr && told_relay_observed_addr {
+                    break;
                 }
-                event => panic!("{event:?}"),
             }
+        });
 
-            if learned_observed_addr && told_relay_observed_addr {
-                break;
-            }
-        }
-    });
-
-    if let Mode::Listen = opts.mode {
+        // listen mode as well
         swarm
-            .listen_on(opts.relay_address.clone().with(Protocol::P2pCircuit))
+            .listen_on(relay_address.clone().with(Protocol::P2pCircuit))
             .unwrap();
     }
+
+    // if let Mode::Listen = opts.mode {
+    //     swarm
+    //         .listen_on(opts.relay_address.clone().with(Protocol::P2pCircuit))
+    //         .unwrap();
+    // }
 
     // match opts.mode {
     //     Mode::Dial => {
@@ -271,22 +280,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 } else if let Some(addr) = line.strip_prefix("/holepunch ") {
                     let remote_peer_id: PeerId = addr.parse()?;
 
-                    // let relay_addr = match opts.relay_address.clone() {
-                    //     Some(a) => a,
-                    //     None => {
-                    //         warn!("attempted to hole punch without supplying a relay server address");
-                    //         continue;
-                    //     }
-                    // };
+                    let relay_addr = match opts.relay_address.clone() {
+                        Some(a) => a,
+                        None => {
+                            warn!("attempted to hole punch without supplying a relay server address");
+                            continue;
+                        }
+                    };
 
                     swarm
                         .dial(
-                            opts.relay_address.clone()
+                            relay_addr.clone()
                                 .with(Protocol::P2pCircuit)
                                 .with(Protocol::P2p(remote_peer_id)),
                         )
                         .unwrap();
-                    // swarm.dial(relay_addr.with(Protocol::P2pCircuit).with(Protocol::P2p(remote_peer_id)))?;
                 } else {
                     let line = format!("{username}: {line}");
                     if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), line.as_bytes()) {
