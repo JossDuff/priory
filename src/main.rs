@@ -41,6 +41,7 @@ struct Opts {
 
     /// If attempting to holepunch, this address will be used as the relay.  Only needed for the
     /// listening side of the hole punch
+    // @Tim this will crash if we're gonna connect via mDns but supply a relay_address
     #[clap(long)]
     relay_address: Option<Multiaddr>,
 }
@@ -164,25 +165,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
     // Wait to listen on all interfaces.
-    block_on(async {
-        let mut delay = futures_timer::Delay::new(std::time::Duration::from_secs(1)).fuse();
-        loop {
-            futures::select! {
-                event = swarm.next() => {
-                    match event.unwrap() {
-                        SwarmEvent::NewListenAddr { address, .. } => {
-                            tracing::info!(%address, "Listening on address");
-                        }
-                        event => panic!("{event:?}"),
-                    }
-                }
-                _ = delay => {
-                    // Likely listening on all interfaces now, thus continuing by breaking the loop.
-                    break;
-                }
-            }
-        }
-    });
+    // block_on(async {
+    //     let mut delay = futures_timer::Delay::new(std::time::Duration::from_secs(1)).fuse();
+    //     loop {
+    //         futures::select! {
+    //             event = swarm.next() => {
+    //                 match event.unwrap() {
+    //                     SwarmEvent::NewListenAddr { address, .. } => {
+    //                         tracing::info!(%address, "Listening on address");
+    //                     }
+    //                     event => panic!("{event:?}"),
+    //                 }
+    //             }
+    //             _ = delay => {
+    //                 // Likely listening on all interfaces now, thus continuing by breaking the loop.
+    //                 break;
+    //             }
+    //         }
+    //     }
+    // });
     // if let Some(relay_address) = opts.relay_address.clone() {
     //     swarm.dial(relay_address.clone())?;
     //     swarm
@@ -194,6 +195,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // our local public address and (b) enable a freshly started relay to learn its public address.
     if let Some(relay_address) = opts.relay_address.clone() {
         swarm.dial(relay_address.clone()).unwrap();
+        // @Tim: why is this necessary?  We can't just wait 2 seconds
         block_on(async {
             let mut learned_observed_addr = false;
             let mut told_relay_observed_addr = false;
@@ -202,7 +204,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 match swarm.next().await.unwrap() {
                     SwarmEvent::NewListenAddr { .. } => {}
                     SwarmEvent::Dialing { .. } => {}
-                    SwarmEvent::ConnectionEstablished { .. } => {}
+                    SwarmEvent::ConnectionEstablished { .. } => {
+                        // @Tim this also doesn't work
+                        // Wait until we've dialed
+                        // break;
+                    }
                     SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {
                         ..
                     })) => {
