@@ -1,3 +1,4 @@
+use clap::Parser;
 /**
 
 TODO:
@@ -9,7 +10,6 @@ TODO:
 
 
 **/
-use clap::Parser;
 use futures::{executor::block_on, future::FutureExt, stream::StreamExt};
 use libp2p::core::ConnectedPoint;
 use libp2p::kad;
@@ -36,27 +36,8 @@ use tokio::{io, io::AsyncBufReadExt, select};
 use tracing::{debug, error, info, trace, warn};
 use tracing_subscriber::EnvFilter;
 
-// TODO: clap to pass in relay address as an option (only use if we're holepunching)
-#[derive(Debug, Parser)]
-struct Opts {
-    /// If attempting to holepunch, this address will be used as the relay.  
-    #[clap(long)]
-    relay_address: Option<Multiaddr>,
-
-    // TODO:
-    /// specify whether or not you will be a relay node for others.  This requires your node is
-    /// publically accessible.
-    // #[clap(long)]
-    // is_relay: bool,
-
-    /// Fixed value to generate deterministic peer id
-    #[clap(long)]
-    secret_key_seed: u8,
-
-    /// The port used to listen on all interfaces
-    #[clap(long, default_value = "0")]
-    port: u16,
-}
+mod config;
+use config::Config;
 
 // custom network behavious that combines gossipsub and mdns
 #[derive(NetworkBehaviour)]
@@ -78,14 +59,14 @@ struct MyBehaviour {
 async fn main() -> Result<(), Box<dyn Error>> {
     let username = prompt_username();
 
-    let opts = Opts::parse();
+    let cfg = Config::parse();
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .try_init();
 
     // deterministically generate a PeerId based on given seed for development ease.
-    let local_key: identity::Keypair = generate_ed25519(opts.secret_key_seed);
+    let local_key: identity::Keypair = generate_ed25519(cfg.secret_key_seed);
 
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
         .with_tokio()
@@ -162,12 +143,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Listen on all interfaces and the specified port
     let listen_addr_tcp = Multiaddr::empty()
         .with(Protocol::from(Ipv4Addr::UNSPECIFIED))
-        .with(Protocol::Tcp(opts.port));
+        .with(Protocol::Tcp(cfg.port));
     swarm.listen_on(listen_addr_tcp)?;
 
     let listen_addr_quic = Multiaddr::empty()
         .with(Protocol::from(Ipv4Addr::UNSPECIFIED))
-        .with(Protocol::Udp(opts.port))
+        .with(Protocol::Udp(cfg.port))
         .with(Protocol::QuicV1);
     swarm.listen_on(listen_addr_quic)?;
 
@@ -191,7 +172,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     //         }
     //     }
     // });
-    // if let Some(relay_address) = opts.relay_address.clone() {
+    // if let Some(relay_address) = cfg.relay_address.clone() {
     //     swarm.dial(relay_address.clone())?;
     //     swarm
     //         .listen_on(relay_address.with(Protocol::P2pCircuit))
@@ -200,7 +181,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Connect to the relay server. Not for the reservation or relayed connection, but to (a) learn
     // our local public address and (b) enable a freshly started relay to learn its public address.
-    if let Some(relay_address) = opts.relay_address.clone() {
+    if let Some(relay_address) = cfg.relay_address.clone() {
         swarm.dial(relay_address.clone()).unwrap();
         // @Tim: why is this necessary?  We can't just wait 2 seconds
         // A: we need to know our external IP so we can tell the other node who to holepunch to
@@ -255,7 +236,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 } else if let Some(addr) = line.strip_prefix("/holepunch ") {
                     let remote_peer_id: PeerId = addr.parse()?;
 
-                    let relay_addr = match opts.relay_address.clone() {
+                    let relay_addr = match cfg.relay_address.clone() {
                         Some(a) => a,
                         None => {
                             warn!("attempted to hole punch without supplying a relay server address");
