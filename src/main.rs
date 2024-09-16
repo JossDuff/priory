@@ -35,32 +35,11 @@ use tracing_subscriber::EnvFilter;
 // TODO: clap to pass in relay address as an option (only use if we're holepunching)
 #[derive(Debug, Parser)]
 struct Opts {
-    /// The mode (client-listen, client-dial).
-    //    #[clap(long)]
-    //    mode: Mode,
-
     /// If attempting to holepunch, this address will be used as the relay.  Only needed for the
     /// listening side of the hole punch
     // @Tim this will crash if we're gonna connect via mDns but supply a relay_address
     #[clap(long)]
     relay_address: Option<Multiaddr>,
-}
-
-#[derive(Clone, Debug, PartialEq, Parser)]
-enum Mode {
-    Dial,
-    Listen,
-}
-
-impl FromStr for Mode {
-    type Err = String;
-    fn from_str(mode: &str) -> Result<Self, Self::Err> {
-        match mode {
-            "dial" => Ok(Mode::Dial),
-            "listen" => Ok(Mode::Listen),
-            _ => Err("Expected either 'dial' or 'listen'".to_string()),
-        }
-    }
 }
 
 // custom network behavious that combines gossipsub and mdns
@@ -238,29 +217,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .listen_on(relay_address.clone().with(Protocol::P2pCircuit))
             .unwrap();
     }
-
-    // if let Mode::Listen = opts.mode {
-    //     swarm
-    //         .listen_on(opts.relay_address.clone().with(Protocol::P2pCircuit))
-    //         .unwrap();
-    // }
-
-    // match opts.mode {
-    //     Mode::Dial => {
-    //         swarm
-    //             .dial(
-    //                 opts.relay_address
-    //                     .with(Protocol::P2pCircuit)
-    //                     .with(Protocol::P2p(opts.remote_peer_id.unwrap())),
-    //             )
-    //             .unwrap();
-    //     }
-    //     Mode::Listen => {
-    //         swarm
-    //             .listen_on(opts.relay_address.with(Protocol::P2pCircuit))
-    //             .unwrap();
-    //     }
-    // }
 
     println!("Enter messages via STDIN and they will be sent to connected peers using Gossipsub");
     println!("To bootstrap, type '/bootstrap <multiaddr of external peer>'");
