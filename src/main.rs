@@ -39,7 +39,7 @@ struct MyBehaviour {
     // TODO: I think this doesn't work when all nodes are both relays and relay clients
     relay_client: relay::client::Behaviour,
     // all nodes are relay servers for routing messages
-    // relay: relay::Behaviour,
+    relay: relay::Behaviour,
     // ping: ping::Behaviour,
     // for learning our own addr and telling other nodes their addr
     identify: identify::Behaviour,
@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             let relay_client = relay_behaviour;
 
-            // let relay = relay::Behaviour::new(keypair.public().to_peer_id(), Default::default());
+            let relay = relay::Behaviour::new(keypair.public().to_peer_id(), Default::default());
 
             let identify = identify::Behaviour::new(identify::Config::new(
                 "TODO/0.0.1".to_string(),
@@ -112,7 +112,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 gossipsub,
                 mdns,
                 relay_client,
-                // relay,
+                relay,
                 identify,
                 dcutr,
             })
@@ -165,6 +165,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     )) => {
                         tracing::info!(address=%observed_addr, "Relay told us our observed address");
                         learned_observed_addr = true;
+                        swarm.add_external_address(observed_addr)
                     }
                     _ => {}
                 }
@@ -254,12 +255,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 // })) => {
                 //     // tracing::info!("Told relay its public address");
                 // }
-                // SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
-                //     info: identify::Info { observed_addr, .. },
-                //     ..
-                // })) => {
-                //     // tracing::info!(address=%observed_addr, "Relay told us our observed address");
-                // }
+                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
+                    info: identify::Info { observed_addr, .. },
+                    ..
+                })) => {
+                    tracing::info!(address=%observed_addr, "Relay told us our observed address");
+                    swarm.add_external_address(observed_addr)
+                }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, _multiaddr) in list {
                         // println!("mDNS discovered a new peer: {peer_id}");
