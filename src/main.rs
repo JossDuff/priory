@@ -37,7 +37,7 @@ struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
     mdns: mdns::tokio::Behaviour,
     // kademlia: kad::Behaviour<MemoryStore>,
-    relay_client: relay::client::Behaviour,
+    // relay_client: relay::client::Behaviour,
     // relay server for routing messages
     relay: relay::Behaviour,
     // ping: ping::Behaviour,
@@ -68,8 +68,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )?
         .with_quic()
         .with_dns()?
-        .with_relay_client(noise::Config::new, yamux::Config::default)?
-        .with_behaviour(|keypair, relay_behaviour| {
+        // .with_relay_client(noise::Config::new, yamux::Config::default)?
+        .with_behaviour(|keypair /*, relay_behaviour*/| {
             // To content-address messave, we can take the hash of the message and use it as an ID.
             let message_id_fn = |message: &gossipsub::Message| {
                 let mut s = DefaultHasher::new();
@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 keypair.public().to_peer_id(),
             )?;
 
-            let relay_client = relay_behaviour;
+            // let relay_client = relay_behaviour;
 
             let relay = relay::Behaviour::new(keypair.public().to_peer_id(), Default::default());
 
@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Ok(MyBehaviour {
                 gossipsub,
                 mdns,
-                relay_client,
+                // relay_client,
                 relay,
                 identify,
                 dcutr,
@@ -234,29 +234,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
                     warn!("Connection to {peer_id} closed: {cause:?}");
-                    info!("Removed {peer_id} from the routing table (if it was in there).");
+                    // info!("Removed {peer_id} from the routing table (if it was in there).");
                 }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Dcutr(event)) => {
                     info!("dcutr: {:?}", event)
                 }
-                SwarmEvent::Behaviour(MyBehaviourEvent::RelayClient(
-                    relay::client::Event::ReservationReqAccepted { .. },
-                )) => {
-                    info!("Relay accepted our reservation request");
+                // SwarmEvent::Behaviour(MyBehaviourEvent::RelayClient(
+                //     relay::client::Event::ReservationReqAccepted { .. },
+                // )) => {
+                //     info!("Relay accepted our reservation request");
+                // }
+                SwarmEvent::Behaviour(MyBehaviourEvent::Relay(event)) => {
+                    info!("relay: {:?}", event)
                 }
-                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {
-                    ..
-                })) => {
-                    tracing::info!("Told relay its public address");
-                }
-                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
-                    info: identify::Info { observed_addr, .. },
-                    ..
-                })) => {
-                    // relay example has below line:
-                    // swarm.add_external_address(observed_addr.clone());
-                    tracing::info!(address=%observed_addr, "Relay told us our observed address");
-                }
+                // SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {
+                //     ..
+                // })) => {
+                //     tracing::info!("Told relay its public address");
+                // }
+                // SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
+                //     info: identify::Info { observed_addr, .. },
+                //     ..
+                // })) => {
+                //     // relay example has below line:
+                //     // swarm.add_external_address(observed_addr.clone());
+                //     tracing::info!(address=%observed_addr, "Relay told us our observed address");
+                // }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, multiaddr) in list {
                         // println!("mDNS discovered a new peer: {peer_id}");
