@@ -36,20 +36,22 @@ use config::Config;
 struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
     mdns: mdns::tokio::Behaviour,
-    // kademlia: kad::Behaviour<MemoryStore>,
+    // TODO: I think this doesn't work when all nodes are both relays and relay clients
     relay_client: relay::client::Behaviour,
-    // relay server for routing messages
-    relay: relay::Behaviour,
+    // all nodes are relay servers for routing messages
+    // relay: relay::Behaviour,
     // ping: ping::Behaviour,
     // for learning our own addr and telling other nodes their addr
     identify: identify::Behaviour,
     // hole punching
     dcutr: dcutr::Behaviour,
+    // TODO: can use connection_limits::Behaviour to limit connections by a % of max memory
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let cfg = Config::parse();
+
     let username = prompt_username();
 
     let _ = tracing_subscriber::fmt()
@@ -97,7 +99,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             let relay_client = relay_behaviour;
 
-            let relay = relay::Behaviour::new(keypair.public().to_peer_id(), Default::default());
+            // let relay = relay::Behaviour::new(keypair.public().to_peer_id(), Default::default());
 
             let identify = identify::Behaviour::new(identify::Config::new(
                 "TODO/0.0.1".to_string(),
@@ -110,7 +112,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 gossipsub,
                 mdns,
                 relay_client,
-                relay,
+                // relay,
                 identify,
                 dcutr,
             })
@@ -234,7 +236,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
                     warn!("Connection to {peer_id} closed: {cause:?}");
-                    info!("Removed {peer_id} from the routing table (if it was in there).");
+                    // info!("Removed {peer_id} from the routing table (if it was in there).");
                 }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Dcutr(event)) => {
                     info!("dcutr: {:?}", event)
@@ -247,18 +249,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {
                     ..
                 })) => {
-                    tracing::info!("Told relay its public address");
+                    // tracing::info!("Told relay its public address");
                 }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
                     info: identify::Info { observed_addr, .. },
                     ..
                 })) => {
-                    // relay example has below line:
-                    // swarm.add_external_address(observed_addr.clone());
-                    tracing::info!(address=%observed_addr, "Relay told us our observed address");
+                    // tracing::info!(address=%observed_addr, "Relay told us our observed address");
                 }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
-                    for (peer_id, multiaddr) in list {
+                    for (peer_id, _multiaddr) in list {
                         // println!("mDNS discovered a new peer: {peer_id}");
                         // Explicit peers are peers that remain connected and we unconditionally
                         // forward messages to, outside of the scoring system.
@@ -267,20 +267,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 },
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
-                    for (peer_id, multiaddr) in list {
+                    for (peer_id, _multiaddr) in list {
                         // println!("mDNS discovered peer has expired: {peer_id}");
                         swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
                         // swarm.behaviour_mut().kademlia.remove_address(&peer_id, &multiaddr);
                     }
                 }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
-                    propagation_source: _peer_id,
-                    message_id: _id,
+                    propagation_source: peer_id,
+                    message_id: id,
                     message,
                 })) => println!(
-                        // "Got message: '{}' with id: {id} from peer: {peer_id}",
-                        "{}",
+                        "Got message: '{}' with id: {id} from peer: {peer_id}",
+                        // "{}",
                         String::from_utf8_lossy(&message.data),
+                    ),
+                SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed {
+                    peer_id, topic: _
+                })) => info!(
+                        "{peer_id} subscribed to the topic!",
                     ),
                 _ => {}
             }
