@@ -52,7 +52,11 @@ struct MyBehaviour {
 async fn main() -> Result<(), Box<dyn Error>> {
     let cfg = Config::parse();
 
-    let username = prompt_username();
+    let username = if let Some(name) = cfg.name {
+        name
+    } else {
+        prompt_username()
+    };
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
