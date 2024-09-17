@@ -1,4 +1,4 @@
-use clap::Parser;
+use anyhow::Result;
 /**
 
 TODO:
@@ -6,6 +6,7 @@ TODO:
 [] specify peering degree.  You should be able to connect to only your nodes if you want.  If you have peering degree of 0 your node should still work
 [] relay in here.  Do you want to be a relay y/n
 [] directly dialing people on dns
+[] config file
 [] automatically discovering peers via holepunching
 
 
@@ -32,12 +33,13 @@ use tracing_subscriber::EnvFilter;
 mod config;
 use config::Config;
 
+const CONFIG_FILE_PATH: &str = "sigil.toml";
+
 // custom network behavious that combines gossipsub and mdns
 #[derive(NetworkBehaviour)]
 struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
     mdns: mdns::tokio::Behaviour,
-    // TODO: I think this doesn't work when all nodes are both relays and relay clients
     relay_client: relay::client::Behaviour,
     // all nodes are relay servers for routing messages
     relay: relay::Behaviour,
@@ -50,8 +52,8 @@ struct MyBehaviour {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let cfg = Config::parse();
+async fn main() -> Result<()> {
+    let cfg = Config::parse(CONFIG_FILE_PATH)?;
 
     let username = if let Some(name) = cfg.name {
         name
@@ -151,11 +153,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         loop {
             futures::select! {
                 event = swarm.next() => {
-                    match event.unwrap() {
-                        SwarmEvent::NewListenAddr { address, .. } => {
-                            tracing::info!(%address, "Listening on address");
-                        }
-                        _ => {},
+                    if let SwarmEvent::NewListenAddr {address, ..} = event.unwrap() {
+                        info!(%address, "Listening on address")
                     }
                 }
                 _ = delay => {

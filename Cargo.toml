@@ -24,14 +24,16 @@ libp2p = { version = "0.54.1", features = [
 	"dns",
 	"identify",
 	"relay",
+	"serde",
 ] }
 
 futures-timer = "3.0"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
-clap = { version = "4.5.6", features = ["derive"] }
 anyhow = "1.0.88"
 fastrand = "2.1.1"
+serde = { version = "1.0.210", features = ["derive"] }
+toml = "0.8.19"
 
 [dependencies.libp2p-gossipsub]
 version = "0.47.0"
