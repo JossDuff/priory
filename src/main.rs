@@ -1,4 +1,4 @@
-use clap::Parser;
+use anyhow::Result;
 /**
 
 TODO:
@@ -6,17 +6,19 @@ TODO:
 [] specify peering degree.  You should be able to connect to only your nodes if you want.  If you have peering degree of 0 your node should still work
 [] relay in here.  Do you want to be a relay y/n
 [] directly dialing people on dns
+[] config file
 [] automatically discovering peers via holepunching
 
 
 **/
+use futures::FutureExt;
 use futures::{executor::block_on, stream::StreamExt};
 use libp2p::{
     core::multiaddr::{Multiaddr, Protocol},
     dcutr, gossipsub, identify, identity, mdns, noise, relay,
     swarm::NetworkBehaviour,
     swarm::SwarmEvent,
-    tcp, yamux, PeerId,
+    tcp, yamux,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
@@ -31,12 +33,13 @@ use tracing_subscriber::EnvFilter;
 mod config;
 use config::Config;
 
+const CONFIG_FILE_PATH: &str = "sigil.toml";
+
 // custom network behavious that combines gossipsub and mdns
 #[derive(NetworkBehaviour)]
 struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
     mdns: mdns::tokio::Behaviour,
-    // TODO: I think this doesn't work when all nodes are both relays and relay clients
     relay_client: relay::client::Behaviour,
     // all nodes are relay servers for routing messages
     relay: relay::Behaviour,
@@ -49,8 +52,8 @@ struct MyBehaviour {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let cfg = Config::parse();
+async fn main() -> Result<()> {
+    let cfg = Config::parse(CONFIG_FILE_PATH)?;
 
     let username = if let Some(name) = cfg.name {
         name
@@ -144,6 +147,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with(Protocol::QuicV1);
     swarm.listen_on(listen_addr_quic)?;
 
+    // Wait to listen on all interfaces.
+    block_on(async {
+        let mut delay = futures_timer::Delay::new(std::time::Duration::from_secs(1)).fuse();
+        loop {
+            futures::select! {
+                event = swarm.next() => {
+                    if let SwarmEvent::NewListenAddr {address, ..} = event.unwrap() {
+                        info!(%address, "Listening on address")
+                    }
+                }
+                _ = delay => {
+                    // Likely listening on all interfaces now, thus continuing by breaking the loop.
+                    break;
+                }
+            }
+        }
+    });
+
     // Connect to the relay server. Not for the reservation or relayed connection, but to (a) learn
     // our local public address and (b) enable a freshly started relay to learn its public address.
     if let Some(relay_address) = cfg.relay_address.clone() {
@@ -186,43 +207,55 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .unwrap();
     }
 
+    if let Some(peer_id) = cfg.peers {
+        swarm
+            .dial(
+                cfg.relay_address
+                    .unwrap()
+                    .with(Protocol::P2pCircuit)
+                    .with(Protocol::P2p(peer_id)),
+            )
+            .unwrap();
+        info!(peer = ?peer_id, "Attempting to hole punch")
+    }
+
     println!("Enter messages via STDIN and they will be sent to connected peers using Gossipsub");
-    println!("To bootstrap, type '/bootstrap <multiaddr of external peer>'");
-    println!("To holepunch, type '/holepunch <peer_id of holepunch target>'\n");
+    // println!("To bootstrap, type '/bootstrap <multiaddr of external peer>'");
+    // println!("To holepunch, type '/holepunch <peer_id of holepunch target>'\n");
 
     // let it rip
     loop {
         select! {
             Ok(Some(line)) = stdin.next_line() => {
-                if let Some(addr) = line.strip_prefix("/bootstrap ") {
-                    let addr: libp2p::Multiaddr = addr.parse()?;
-                    swarm.dial(addr.clone())?;
-                    info!("bootstrapped with address {}", addr);
-                } else if let Some(addr) = line.strip_prefix("/holepunch ") {
-                    let remote_peer_id: PeerId = addr.parse()?;
-
-                    let relay_addr = match cfg.relay_address.clone() {
-                        Some(a) => a,
-                        None => {
-                            warn!("attempted to hole punch without supplying a relay server address");
-                            continue;
-                        }
-                    };
-
-                    // Q: will gossipsub auto holepunch for us when a new node joins the network?
-                    swarm
-                        .dial(
-                            relay_addr.clone()
-                                .with(Protocol::P2pCircuit)
-                                .with(Protocol::P2p(remote_peer_id)),
-                        )
-                        .unwrap();
-                } else {
+                // if let Some(addr) = line.strip_prefix("/bootstrap ") {
+                //     let addr: libp2p::Multiaddr = addr.parse()?;
+                //     swarm.dial(addr.clone())?;
+                //     info!("bootstrapped with address {}", addr);
+                // } else if let Some(addr) = line.strip_prefix("/holepunch ") {
+                //     let remote_peer_id: PeerId = addr.parse()?;
+                //
+                //     let relay_addr = match cfg.relay_address.clone() {
+                //         Some(a) => a,
+                //         None => {
+                //             warn!("attempted to hole punch without supplying a relay server address");
+                //             continue;
+                //         }
+                //     };
+                //
+                //     // Q: will gossipsub auto holepunch for us when a new node joins the network?
+                //     swarm
+                //         .dial(
+                //             relay_addr.clone()
+                //                 .with(Protocol::P2pCircuit)
+                //                 .with(Protocol::P2p(remote_peer_id)),
+                //         )
+                //         .unwrap();
+                // } else {
                     let line = format!("{username}: {line}");
                     if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), line.as_bytes()) {
                         warn!("Publish error: {e:?}");
                     }
-                }
+                // }
             }
             event = swarm.select_next_some() => match event {
                 SwarmEvent::NewListenAddr { address, .. } => {
