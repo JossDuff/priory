@@ -1,5 +1,5 @@
 use clap::Parser;
-use libp2p::multiaddr::Multiaddr;
+use libp2p::{multiaddr::Multiaddr, PeerId};
 
 #[derive(Debug, Parser)]
 pub struct Config {
@@ -7,11 +7,16 @@ pub struct Config {
     #[clap(long)]
     pub relay_address: Option<Multiaddr>,
 
+    // TODO: make this a vec
+    /// peers to connect to on startup
+    #[clap(long)]
+    pub peers: Option<PeerId>,
+
     // TODO:
     /// specify whether or not you will be a relay node for others.  This requires your node is
     /// publically accessible.
-    #[clap(long)]
-    pub is_relay: bool,
+    // #[clap(long)]
+    // pub is_relay: bool,
 
     /// Name that appears when sending a message
     #[clap(long)]

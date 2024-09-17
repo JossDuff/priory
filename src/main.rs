@@ -10,13 +10,14 @@ TODO:
 
 
 **/
+use futures::FutureExt;
 use futures::{executor::block_on, stream::StreamExt};
 use libp2p::{
     core::multiaddr::{Multiaddr, Protocol},
     dcutr, gossipsub, identify, identity, mdns, noise, relay,
     swarm::NetworkBehaviour,
     swarm::SwarmEvent,
-    tcp, yamux, PeerId,
+    tcp, yamux,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
@@ -144,6 +145,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with(Protocol::QuicV1);
     swarm.listen_on(listen_addr_quic)?;
 
+    // Wait to listen on all interfaces.
+    block_on(async {
+        let mut delay = futures_timer::Delay::new(std::time::Duration::from_secs(1)).fuse();
+        loop {
+            futures::select! {
+                event = swarm.next() => {
+                    match event.unwrap() {
+                        SwarmEvent::NewListenAddr { address, .. } => {
+                            tracing::info!(%address, "Listening on address");
+                        }
+                        _ => {},
+                    }
+                }
+                _ = delay => {
+                    // Likely listening on all interfaces now, thus continuing by breaking the loop.
+                    break;
+                }
+            }
+        }
+    });
+
     // Connect to the relay server. Not for the reservation or relayed connection, but to (a) learn
     // our local public address and (b) enable a freshly started relay to learn its public address.
     if let Some(relay_address) = cfg.relay_address.clone() {
@@ -186,43 +208,55 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .unwrap();
     }
 
+    if let Some(peer_id) = cfg.peers {
+        swarm
+            .dial(
+                cfg.relay_address
+                    .unwrap()
+                    .with(Protocol::P2pCircuit)
+                    .with(Protocol::P2p(peer_id)),
+            )
+            .unwrap();
+        info!(peer = ?peer_id, "Attempting to hole punch")
+    }
+
     println!("Enter messages via STDIN and they will be sent to connected peers using Gossipsub");
-    println!("To bootstrap, type '/bootstrap <multiaddr of external peer>'");
-    println!("To holepunch, type '/holepunch <peer_id of holepunch target>'\n");
+    // println!("To bootstrap, type '/bootstrap <multiaddr of external peer>'");
+    // println!("To holepunch, type '/holepunch <peer_id of holepunch target>'\n");
 
     // let it rip
     loop {
         select! {
             Ok(Some(line)) = stdin.next_line() => {
-                if let Some(addr) = line.strip_prefix("/bootstrap ") {
-                    let addr: libp2p::Multiaddr = addr.parse()?;
-                    swarm.dial(addr.clone())?;
-                    info!("bootstrapped with address {}", addr);
-                } else if let Some(addr) = line.strip_prefix("/holepunch ") {
-                    let remote_peer_id: PeerId = addr.parse()?;
-
-                    let relay_addr = match cfg.relay_address.clone() {
-                        Some(a) => a,
-                        None => {
-                            warn!("attempted to hole punch without supplying a relay server address");
-                            continue;
-                        }
-                    };
-
-                    // Q: will gossipsub auto holepunch for us when a new node joins the network?
-                    swarm
-                        .dial(
-                            relay_addr.clone()
-                                .with(Protocol::P2pCircuit)
-                                .with(Protocol::P2p(remote_peer_id)),
-                        )
-                        .unwrap();
-                } else {
+                // if let Some(addr) = line.strip_prefix("/bootstrap ") {
+                //     let addr: libp2p::Multiaddr = addr.parse()?;
+                //     swarm.dial(addr.clone())?;
+                //     info!("bootstrapped with address {}", addr);
+                // } else if let Some(addr) = line.strip_prefix("/holepunch ") {
+                //     let remote_peer_id: PeerId = addr.parse()?;
+                //
+                //     let relay_addr = match cfg.relay_address.clone() {
+                //         Some(a) => a,
+                //         None => {
+                //             warn!("attempted to hole punch without supplying a relay server address");
+                //             continue;
+                //         }
+                //     };
+                //
+                //     // Q: will gossipsub auto holepunch for us when a new node joins the network?
+                //     swarm
+                //         .dial(
+                //             relay_addr.clone()
+                //                 .with(Protocol::P2pCircuit)
+                //                 .with(Protocol::P2p(remote_peer_id)),
+                //         )
+                //         .unwrap();
+                // } else {
                     let line = format!("{username}: {line}");
                     if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), line.as_bytes()) {
                         warn!("Publish error: {e:?}");
                     }
-                }
+                // }
             }
             event = swarm.select_next_some() => match event {
                 SwarmEvent::NewListenAddr { address, .. } => {
