@@ -163,6 +163,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     )) => {
                         tracing::info!(address=%observed_addr, "Relay told us our observed address");
                         learned_observed_addr = true;
+                        swarm.add_external_address(observed_addr);
                     }
                     _ => {}
                 }
@@ -252,14 +253,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 // })) => {
                 //     tracing::info!("Told relay its public address");
                 // }
-                // SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
-                //     info: identify::Info { observed_addr, .. },
-                //     ..
-                // })) => {
-                //     // relay example has below line:
-                //     // swarm.add_external_address(observed_addr.clone());
-                //     tracing::info!(address=%observed_addr, "Relay told us our observed address");
-                // }
+                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
+                    info: identify::Info { observed_addr, .. },
+                    ..
+                })) => {
+                    // relay example has below line:
+                    tracing::info!(address=%observed_addr, "Relay told us our observed address");
+                    swarm.add_external_address(observed_addr);
+                }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, multiaddr) in list {
                         // println!("mDNS discovered a new peer: {peer_id}");
