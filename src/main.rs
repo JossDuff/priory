@@ -241,22 +241,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 SwarmEvent::Behaviour(MyBehaviourEvent::Dcutr(event)) => {
                     info!("dcutr: {:?}", event)
                 }
-                SwarmEvent::Behaviour(MyBehaviourEvent::RelayClient(
-                    relay::client::Event::ReservationReqAccepted { .. },
-                )) => {
-                    info!("Relay accepted our reservation request");
+                SwarmEvent::Behaviour(MyBehaviourEvent::RelayClient(event) )=> {
+                    info!("Relay client: {event:?}")
                 }
-                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {
-                    ..
-                })) => {
-                    // tracing::info!("Told relay its public address");
-                }
-                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
-                    info: identify::Info { observed_addr, .. },
-                    ..
-                })) => {
-                    // tracing::info!(address=%observed_addr, "Relay told us our observed address");
-                }
+                // SwarmEvent::Behaviour(MyBehaviourEvent::RelayClient(
+                //     relay::client::Event::ReservationReqAccepted { .. },
+                // )) => {
+                //     info!("Relay accepted our reservation request");
+                // }
+                // SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {
+                //     ..
+                // })) => {
+                //     // tracing::info!("Told relay its public address");
+                // }
+                // SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
+                //     info: identify::Info { observed_addr, .. },
+                //     ..
+                // })) => {
+                //     // tracing::info!(address=%observed_addr, "Relay told us our observed address");
+                // }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, _multiaddr) in list {
                         // println!("mDNS discovered a new peer: {peer_id}");
