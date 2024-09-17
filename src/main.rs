@@ -226,8 +226,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     let p2p_address = address.with(Protocol::P2p(*swarm.local_peer_id()));
                     info!("Listening on {p2p_address}");
                 }
-                SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                    info!("Connected to {peer_id}");
+                SwarmEvent::ConnectionEstablished { peer_id, endpoint, num_established, ..} => {
+                    info!(%peer_id, ?endpoint, %num_established, "Connection Established")
                 }
                 SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                     warn!("Failed to dial {peer_id:?}: {error}");
@@ -235,9 +235,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 SwarmEvent::IncomingConnectionError { error, .. } => {
                     warn!("{:#}", anyhow::Error::from(error))
                 }
-                SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
-                    warn!("Connection to {peer_id} closed: {cause:?}");
-                    // info!("Removed {peer_id} from the routing table (if it was in there).");
+                SwarmEvent::ConnectionClosed { peer_id, cause, endpoint, num_established, ..} => {
+                    info!(%peer_id, ?endpoint, %num_established, ?cause, "Connection Closed")
                 }
                 SwarmEvent::Behaviour(MyBehaviourEvent::Dcutr(event)) => {
                     info!("dcutr: {:?}", event)
