@@ -4,4 +4,6 @@ name = "joss!"
 secret_key_seed = 1
 relay_address = "/ip4/142.93.53.125/tcp/4001/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN"
 peers = "12D3KooWQYhTNQdmr3ArTeUHRYzFg94BKyTkoWBDWez9kSCVe2Xo"
-peering_degree = 6
+gossipsub_target_num_connections = 7
+gossipsub_target_num_connections_lower_tolerance = 2
+gossipsub_target_num_connections_upper_tolerance = 5
