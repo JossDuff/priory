@@ -14,8 +14,7 @@ use futures::{executor::block_on, stream::StreamExt};
 use libp2p::{
     core::multiaddr::{Multiaddr, Protocol},
     dcutr, gossipsub, identify, identity, mdns, noise, relay,
-    swarm::NetworkBehaviour,
-    swarm::SwarmEvent,
+    swarm::{behaviour::toggle::Toggle, NetworkBehaviour, SwarmEvent},
     tcp, yamux,
 };
 use std::collections::hash_map::DefaultHasher;
@@ -38,8 +37,9 @@ struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
     mdns: mdns::tokio::Behaviour,
     relay_client: relay::client::Behaviour,
-    // all nodes are relay servers for routing messages
-    relay: relay::Behaviour,
+    // some nodes are relay servers for routing messages
+    // Some nodes are not relays
+    toggle_relay: Toggle<relay::Behaviour>,
     // ping: ping::Behaviour,
     // for learning our own addr and telling other nodes their addr
     identify: identify::Behaviour,
@@ -106,7 +106,15 @@ async fn main() -> Result<()> {
 
             let relay_client = relay_behaviour;
 
-            let relay = relay::Behaviour::new(keypair.public().to_peer_id(), Default::default());
+            // if user has indicated they don't want to be a relay, toggle the relay off
+            let toggle_relay = if let Some(false) = cfg.is_relay {
+                Toggle::from(None)
+            } else {
+                Toggle::from(Some(relay::Behaviour::new(
+                    keypair.public().to_peer_id(),
+                    Default::default(),
+                )))
+            };
 
             let identify = identify::Behaviour::new(identify::Config::new(
                 "TODO/0.0.1".to_string(),
@@ -119,7 +127,7 @@ async fn main() -> Result<()> {
                 gossipsub,
                 mdns,
                 relay_client,
-                relay,
+                toggle_relay,
                 identify,
                 dcutr,
             })

@@ -12,10 +12,10 @@ pub struct Config {
     /// peers to connect to on startup
     pub peers: Option<PeerId>,
 
-    // TODO:
     /// specify whether or not you will be a relay node for others.  This requires your node is
     /// publically accessible.  Will need to do some sort of test of this
-    pub is_relay: bool,
+    /// By default, is true
+    pub is_relay: Option<bool>,
 
     // TODO: should have a lower bound and upper bound
     pub peering_degree: u8,
@@ -50,7 +50,7 @@ mod tests {
         let cfg = Config::parse("example_priory.toml").unwrap();
 
         assert_eq!(cfg.port, 0);
-        assert!(cfg.is_relay);
+        assert_eq!(cfg.is_relay, Some(true));
         assert_eq!(cfg.name, Some("joss!".into()));
         assert_eq!(cfg.secret_key_seed, 1);
         assert_eq!(cfg.relay_address, Some(Multiaddr::from_str("/ip4/142.93.53.125/tcp/4001/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN").unwrap()));
