@@ -83,15 +83,9 @@ async fn main() -> Result<()> {
                 .heartbeat_interval(Duration::from_secs(15)) // This is set to aid debugging by not cluttering the log space
                 .validation_mode(gossipsub::ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message signing)
                 .message_id_fn(message_id_fn) // content-address messages. No two messages of the same content will be propagated.
-                .mesh_n(cfg.gossipsub_target_num_connections)
-                .mesh_n_low(
-                    cfg.gossipsub_target_num_connections
-                        - cfg.gossipsub_target_num_connections_lower_tolerance,
-                )
-                .mesh_n_high(
-                    cfg.gossipsub_target_num_connections
-                        - cfg.gossipsub_target_num_connections_upper_tolerance,
-                )
+                .mesh_n(cfg.num_gossipsub_connections.mesh_n())
+                .mesh_n_low(cfg.num_gossipsub_connections.mesh_n_low())
+                .mesh_n_high(cfg.num_gossipsub_connections.mesh_n_high())
                 // TODO: figure out what this is about
                 // .support_floodsub()
                 // .flood_publish(true)

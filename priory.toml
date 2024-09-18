@@ -1,7 +1,5 @@
-port = 0
-is_relay = true
-name = "joss!"
-secret_key_seed = 1
+is_relay = false
+name = "joss"
+secret_key_seed = 2
 relay_address = "/ip4/142.93.53.125/tcp/4001/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN"
 peers = "12D3KooWQYhTNQdmr3ArTeUHRYzFg94BKyTkoWBDWez9kSCVe2Xo"
-peering_degree = 6
