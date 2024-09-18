@@ -47,7 +47,7 @@ mod tests {
 
     #[test]
     fn test_parse() {
-        let cfg = Config::parse("example_sigil.toml").unwrap();
+        let cfg = Config::parse("example_priory.toml").unwrap();
 
         assert_eq!(cfg.port, 0);
         assert!(cfg.is_relay);
