@@ -4,11 +4,9 @@ use anyhow::Result;
 TODO:
 
 [] specify peering degree.  You should be able to connect to only your nodes if you want.  If you have peering degree of 0 your node should still work
-[] relay in here.  Do you want to be a relay y/n
 [] directly dialing people on dns
-[] config file
 [] automatically discovering peers via holepunching
-
+[] kademlia DHT of relay nodes and the other nodes they're connected to.  Will need to go from private peer (multiaddr or peerid) -> public relay for holepunching
 
 **/
 use futures::FutureExt;
@@ -21,7 +19,6 @@ use libp2p::{
     tcp, yamux,
 };
 use std::collections::hash_map::DefaultHasher;
-use std::error::Error;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::net::Ipv4Addr;
@@ -33,7 +30,7 @@ use tracing_subscriber::EnvFilter;
 mod config;
 use config::Config;
 
-const CONFIG_FILE_PATH: &str = "sigil.toml";
+const CONFIG_FILE_PATH: &str = "priory.toml";
 
 // custom network behavious that combines gossipsub and mdns
 #[derive(NetworkBehaviour)]
@@ -88,9 +85,12 @@ async fn main() -> Result<()> {
 
             // Set a custom gossipsub configuration
             let gossipsub_config = gossipsub::ConfigBuilder::default()
-                .heartbeat_interval(Duration::from_secs(10))
-                .validation_mode(gossipsub::ValidationMode::Strict)
-                .message_id_fn(message_id_fn)
+                .heartbeat_interval(Duration::from_secs(15)) // This is set to aid debugging by not cluttering the log space
+                .validation_mode(gossipsub::ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message signing)
+                .message_id_fn(message_id_fn) // content-address messages. No two messages of the same content will be propagated.
+                // TODO: figure out what this is about
+                // .support_floodsub()
+                // .flood_publish(true)
                 .build()
                 .map_err(|msg| io::Error::new(io::ErrorKind::Other, msg))?;
 
