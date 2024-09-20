@@ -6,9 +6,7 @@ TODO:
 [] specify peering degree.  You should be able to connect to only your nodes if you want.  If you have peering degree of 0 your node should still work
 [] directly dialing people on dns (/dns/<address> in rust-libp2p/examples/ipfs-kad)
 [] kad has bootstrap, but how can we get the bootstrapped connections into gossipsub?
-[] automatically discovering peers via holepunching
-[] kademlia DHT of relay nodes and the other nodes they're connected to.  Will need to go from private peer (multiaddr or peerid) -> public relay for holepunching
-
+[] automatically discovering & connecting to peers via Kad
 [] remove asserts, panics, and unwraps
 **/
 use futures::FutureExt;
@@ -39,7 +37,6 @@ use config::Config;
 const AM_RELAY_FOR_PREFIX: &str = "AM RELAY FOR ";
 const WANT_RELAY_FOR_PREFIX: &str = "WANT RELAY FOR ";
 const GOSSIPSUB_TOPIC: &str = "test-net";
-const KADEMLIA_RELAYERS_KEY: &str = "relayers";
 const IDENTIFY_PROTOCOL_VERSION: &str = "TODO/0.0.1";
 const CONFIG_FILE_PATH: &str = "priory.toml";
 
@@ -52,7 +49,6 @@ struct MyBehaviour {
     // some nodes are relay servers for routing messages
     // Some nodes are not relays
     toggle_relay: Toggle<relay::Behaviour>,
-    // ping: ping::Behaviour,
     // for learning our own addr and telling other nodes their addr
     identify: identify::Behaviour,
     // hole punching
@@ -241,7 +237,8 @@ async fn main() -> Result<()> {
     // at least wait for it to finish.
     swarm.behaviour_mut().kademlia.bootstrap()?;
 
-    // TODO: failed_to_dial was initially multiaddrs.  We need to get the peerIds somehow
+    // TODO: failed_to_dial was initially multiaddrs.  We need to get the peerIds somehow.  Maybe
+    // we can get them from the relay that claims to know the peer we want to dial?
     let failed_to_dial: Vec<PeerId> = Vec::new();
 
     // When DHT is all set and nodes know you're a relay, try to find relays for those nodes you
@@ -299,7 +296,9 @@ async fn main() -> Result<()> {
             }
         });
 
+        // TODO: a kademlia.add_address on successful dial
         swarm.dial(relay_address.clone()).unwrap();
+
         // we need to know our external IP so we can tell the other node who to holepunch to
         block_on(async {
             let mut learned_observed_addr = false;
@@ -332,13 +331,13 @@ async fn main() -> Result<()> {
             }
         });
 
-        // TODO: also update the relay's list of nodes that are listening to it
         // listen mode as well
         swarm
             .listen_on(relay_address.clone().with(Protocol::P2pCircuit))
             .unwrap();
 
         // attempt to hole punch to the node we failed to dial earlier
+        // TODO: a kademlia.add_address on successful dial
         swarm
             .dial(
                 relay_address
@@ -346,8 +345,10 @@ async fn main() -> Result<()> {
                     .with(Protocol::P2p(peer_id)),
             )
             .unwrap();
-        info!(peer = ?peer_id, "Attempting to hole punch")
+        info!(peer = ?peer_id, "Attempting to hole punch");
     }
+
+    // TODO: connect to some random amount of other nodes ??
 
     // println!("Enter messages via STDIN and they will be sent to connected peers using Gossipsub");
     // println!("To bootstrap, type '/bootstrap <multiaddr of external peer>'");
@@ -357,6 +358,7 @@ async fn main() -> Result<()> {
     loop {
         select! {
             Ok(Some(line)) = stdin.next_line() => {
+
                 handle_input_line(&mut swarm.behaviour_mut().kademlia, line)
                 // if let Some(addr) = line.strip_prefix("/bootstrap ") {
                 //     let addr: libp2p::Multiaddr = addr.parse()?;
