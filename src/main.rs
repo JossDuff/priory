@@ -8,6 +8,8 @@ TODO:
 [] kad has bootstrap, but how can we get the bootstrapped connections into gossipsub?
 [] automatically discovering & connecting to peers via Kad
 [] remove asserts, panics, and unwraps
+[] all levels of error handling
+[] all levels of tracing logs.  Re-read zero-to-prod logging approach
 **/
 use futures::FutureExt;
 use futures::{executor::block_on, stream::StreamExt};
@@ -27,7 +29,13 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::net::Ipv4Addr;
 use std::time::Duration;
-use tokio::{io, io::AsyncBufReadExt, select, sync::mpsc::Sender};
+use tokio::{
+    io,
+    io::AsyncBufReadExt,
+    select,
+    sync::mpsc::Sender,
+    time::{sleep, Duration},
+};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -74,11 +82,14 @@ async fn main() -> Result<()> {
     let swarm = build_swarm(&cfg)?;
 
     let (sender, mut receiver) = mpsc::channel(100);
-    
+
     // Bootstrap this node into the network
     spawn(async move {
         bootstrap_swarm(sender.clone()).await;
     });
+
+    // read full lines from stdin
+    let mut stdin = io::BufReader::new(io::stdin()).lines();
 
     // let it rip
     loop {
@@ -103,48 +114,48 @@ struct RelayConnections {
     pub connections: Vec<PeerId>,
 }
 
-// TODO: just to test and figure out how kademlia works
+// TODO: this is just for dev work
 fn handle_input_line(swarm: &mut Swarm<MyBehaviour>, line: String) -> Result<()> {
-                // if let Some(addr) = line.strip_prefix("/bootstrap ") {
-                //     let addr: libp2p::Multiaddr = addr.parse()?;
-                //     swarm.dial(addr.clone())?;
-                //     info!("bootstrapped with address {}", addr);
-                // } else if let Some(addr) = line.strip_prefix("/holepunch ") {
-                //     let remote_peer_id: PeerId = addr.parse()?;
-                //
-                //     let relay_addr = match cfg.relay_address.clone() {
-                //         Some(a) => a,
-                //         None => {
-                //             warn!("attempted to hole punch without supplying a relay server address");
-                //             continue;
-                //         }
-                //     };
-                //
-                //     // Q: will gossipsub auto holepunch for us when a new node joins the network?
-                //     swarm
-                //         .dial(
-                //             relay_addr.clone()
-                //                 .with(Protocol::P2pCircuit)
-                //                 .with(Protocol::P2p(remote_peer_id)),
-                //         )
-                //         .unwrap();
-                // } else {
-                    // let line = format!("{username}: {line}");
-                    // if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), line.as_bytes()) {
-                    //     warn!("Publish error: {e:?}");
-                    // }
-                // }
+    return Ok(());
+    // if let Some(addr) = line.strip_prefix("/bootstrap ") {
+    //     let addr: libp2p::Multiaddr = addr.parse()?;
+    //     swarm.dial(addr.clone())?;
+    //     info!("bootstrapped with address {}", addr);
+    // } else if let Some(addr) = line.strip_prefix("/holepunch ") {
+    //     let remote_peer_id: PeerId = addr.parse()?;
+    //
+    //     let relay_addr = match cfg.relay_address.clone() {
+    //         Some(a) => a,
+    //         None => {
+    //             warn!("attempted to hole punch without supplying a relay server address");
+    //             continue;
+    //         }
+    //     };
+    //
+    //     // Q: will gossipsub auto holepunch for us when a new node joins the network?
+    //     swarm
+    //         .dial(
+    //             relay_addr.clone()
+    //                 .with(Protocol::P2pCircuit)
+    //                 .with(Protocol::P2p(remote_peer_id)),
+    //         )
+    //         .unwrap();
+    // } else {
+    // let line = format!("{username}: {line}");
+    // if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), line.as_bytes()) {
+    //     warn!("Publish error: {e:?}");
+    // }
+    // }
     let mut args = line.split(' ');
     let kademlia = swamr.behaviour_mut().kademlia;
 
-    match args.next() {
+    let _ = match args.next() {
         Some("GET") => {
             let key = {
                 match args.next() {
                     Some(key) => kad::RecordKey::new(&key),
                     None => {
                         eprintln!("Expected key");
-                        return;
                     }
                 }
             };
@@ -156,7 +167,6 @@ fn handle_input_line(swarm: &mut Swarm<MyBehaviour>, line: String) -> Result<()>
                     Some(key) => kad::RecordKey::new(&key),
                     None => {
                         eprintln!("Expected key");
-                        return;
                     }
                 }
             };
@@ -168,7 +178,6 @@ fn handle_input_line(swarm: &mut Swarm<MyBehaviour>, line: String) -> Result<()>
                     Some(key) => kad::RecordKey::new(&key),
                     None => {
                         eprintln!("Expected key");
-                        return;
                     }
                 }
             };
@@ -177,7 +186,6 @@ fn handle_input_line(swarm: &mut Swarm<MyBehaviour>, line: String) -> Result<()>
                     Some(value) => value.as_bytes().to_vec(),
                     None => {
                         eprintln!("Expected value");
-                        return;
                     }
                 }
             };
@@ -197,7 +205,6 @@ fn handle_input_line(swarm: &mut Swarm<MyBehaviour>, line: String) -> Result<()>
                     Some(key) => kad::RecordKey::new(&key),
                     None => {
                         eprintln!("Expected key");
-                        return;
                     }
                 }
             };
@@ -209,7 +216,9 @@ fn handle_input_line(swarm: &mut Swarm<MyBehaviour>, line: String) -> Result<()>
         _ => {
             eprintln!("expected GET, GET_PROVIDERS, PUT or PUT_PROVIDER");
         }
-    }
+    };
+
+    Ok(())
 }
 
 fn handle_message(
@@ -329,62 +338,60 @@ fn build_swarm(cfg: &Config) -> Result<Swarm<MyBehaviour>> {
 }
 
 async fn bootstrap_swarm(sender: Sender<Command>) -> Result<()> {
-    // TODO: the whole body of this
-    todo!()
     // create a gossipsub topic
     let topic = gossipsub::IdentTopic::new(GOSSIPSUB_TOPIC);
-    // subscribes to our IdentTopic
-    swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
 
-    // read full lines from stdin
-    let mut stdin = io::BufReader::new(io::stdin()).lines();
+    // subscribes to our IdentTopic
+    sender
+        .send(Command::GossipsubSubscribe { topic })
+        .await
+        .unwrap();
 
     // Listen on all interfaces and the specified port
     let listen_addr_tcp = Multiaddr::empty()
         .with(Protocol::from(Ipv4Addr::UNSPECIFIED))
         .with(Protocol::Tcp(cfg.port));
-    swarm.listen_on(listen_addr_tcp)?;
+    sender
+        .send(Command::ListenOn {
+            multiaddr: listen_addr_tcp,
+        })
+        .await
+        .unwrap();
 
     let listen_addr_quic = Multiaddr::empty()
         .with(Protocol::from(Ipv4Addr::UNSPECIFIED))
         .with(Protocol::Udp(cfg.port))
         .with(Protocol::QuicV1);
-    swarm.listen_on(listen_addr_quic)?;
+    sender
+        .send(Command::ListenOn {
+            multiaddr: listen_addr_quic,
+        })
+        .await
+        .unwrap();
 
     // Wait to listen on all interfaces.
-    block_on(async {
-        let mut delay = futures_timer::Delay::new(std::time::Duration::from_secs(1)).fuse();
-        loop {
-            futures::select! {
-                // TODO: here we can just wait the delay in this thread.  The event will be handled
-                event = swarm.next() => {
-                    if let SwarmEvent::NewListenAddr {address, ..} = event.unwrap() {
-                        info!(%address, "Listening on address")
-                    }
-                }
-                _ = delay => {
-                    // Likely listening on all interfaces now, thus continuing by breaking the loop.
-                    break;
-                }
-            }
-        }
-    });
+    // Likely listening on all interfaces after a second.
+    sleep(Duration::from_secs(1)).await.unwrap();
 
     // keep track of the nodes that we'll later have to hole punch into
     let mut failed_to_dial: Vec<Multiaddr> = Vec::new();
-    for multiaddr in cfg.peers.clone() {
+
+    // try to dial all peers in config
+    for peer_multiaddr in cfg.peers.clone() {
         // dial peer
         // if successful add to DHT
         // if failure wait until we've made contact with the dht and find a peer to holepunch
-        swarm.dial(multiaddr.clone())?;
+        sender
+            .send(Command::Dial {
+                multiaddr: peer_multiaddr,
+            })
+            .await
+            .unwrap();
+
         loop {
             // TODO: could we get these events from other sources than the above dial?  Should we
             // be checking that the dialed multiaddr is the one we established connection with?
             match swarm.next().await.unwrap() {
-                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
-                    info: identify::Info { observed_addr, .. },
-                    ..
-                })) => swarm.add_external_address(observed_addr),
                 SwarmEvent::ConnectionEstablished {
                     peer_id, endpoint, ..
                 } => {
@@ -399,6 +406,7 @@ async fn bootstrap_swarm(sender: Sender<Command>) -> Result<()> {
                         .add_address(&peer_id, peer_multiaddr);
 
                     info!(multiaddr=%multiaddr, "initial dial success!");
+
                     break;
                 }
                 SwarmEvent::OutgoingConnectionError { error, .. } => {
@@ -419,7 +427,7 @@ async fn bootstrap_swarm(sender: Sender<Command>) -> Result<()> {
 
     // TODO: should we handle the [`Event::OutboundQueryProgressed{QueryResult::Bootstrap}`]?? Or
     // at least wait for it to finish.
-    swarm.behaviour_mut().kademlia.bootstrap()?;
+    sender.send(Command::KademliaBootstrap).await.unwrap();
 
     // TODO: failed_to_dial was initially multiaddrs.  We need to get the peerIds somehow.  Maybe
     // we can get them from the relay that claims to know the peer we want to dial?
@@ -433,16 +441,14 @@ async fn bootstrap_swarm(sender: Sender<Command>) -> Result<()> {
     // events.  Or maybe it has a channel that receives events and sends to one thread that handles
     // all events?? Hmmm
     for peer_id in failed_to_dial {
-        // TODO: send query and response
         let query = format!("{WANT_RELAY_FOR_PREFIX}{peer_id}");
-
-        if let Err(e) = swarm
-            .behaviour_mut()
-            .gossipsub
-            .publish(topic.clone(), query.as_bytes())
-        {
-            warn!("Publish error: {e:?}");
-        }
+        sender
+            .send(Command::GossipsubPublish {
+                topic,
+                data: query.into(),
+            })
+            .await
+            .unwrap();
 
         // Wait until we hear a response from a relay claiming they know this peer_id (or timeout)
         let relay_address = block_on(async {
@@ -463,23 +469,28 @@ async fn bootstrap_swarm(sender: Sender<Command>) -> Result<()> {
                         );
                         let target_peer_id: PeerId = str[0].parse().unwrap();
                         let relay_multiaddr: Multiaddr = str[1].parse().unwrap();
+
                         // if the relay is talking about the node we care about, return the relay's address
                         if target_peer_id == peer_id {
-
                             return relay_multiaddr;
                         }
                     }
                 }
                 }
                 _ = timeout => {
+                    // TODO: what to do if nobody has this node?
                     panic!("timed out while waiting to hear response for a relay who knows of our target node")
                 }
                 }
             }
         });
 
-        // TODO: a kademlia.add_address on successful dial
-        swarm.dial(relay_address.clone()).unwrap();
+        sender
+            .send(Command::Dial {
+                multiaddr: relay_address,
+            })
+            .await
+            .unwrap();
 
         // we need to know our external IP so we can tell the other node who to holepunch to
         block_on(async {
@@ -514,22 +525,17 @@ async fn bootstrap_swarm(sender: Sender<Command>) -> Result<()> {
         });
 
         // listen mode as well
-        swarm
-            .listen_on(relay_address.clone().with(Protocol::P2pCircuit))
-            .unwrap();
+        let multiaddr = relay_address.with(Protocol::P2pCircuit);
+        sender.send(Command::ListenOn { multiaddr }).await.unwrap();
 
         // attempt to hole punch to the node we failed to dial earlier
-        // TODO: a kademlia.add_address on successful dial (comes with common handler)
-        swarm
-            .dial(
-                relay_address
-                    .with(Protocol::P2pCircuit)
-                    .with(Protocol::P2p(peer_id)),
-            )
-            .unwrap();
+        let mutliaddr = relay_address
+            .with(Protocol::P2pCircuit)
+            .with(Protocol::P2p(peer_id));
+        sender.send(Command::Dial { multiaddr }).await.unwrap();
         info!(peer = ?peer_id, "Attempting to hole punch");
     }
 
     // TODO: connect to some random amount of other nodes ??
-    Ok(()) 
+    Ok(())
 }

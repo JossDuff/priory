@@ -1,7 +1,5 @@
+// TODO: is it better to take a mut Swarm here or to send Commands??
 pub fn handle_swarm_event(swarm: &mut Swarm<MyBehaviour>) -> Result<()> {
-    // TODO: this whole mfer
-    todo!()
-    
     match event {
         SwarmEvent::NewListenAddr { address, .. } => {
             let p2p_address = address.with(Protocol::P2p(*swarm.local_peer_id()));
