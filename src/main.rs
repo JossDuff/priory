@@ -34,6 +34,8 @@ use tracing_subscriber::EnvFilter;
 mod config;
 use config::Config;
 
+mod command;
+
 const AM_RELAY_FOR_PREFIX: &str = "AM RELAY FOR ";
 const WANT_RELAY_FOR_PREFIX: &str = "WANT RELAY FOR ";
 const GOSSIPSUB_TOPIC: &str = "test-net";
