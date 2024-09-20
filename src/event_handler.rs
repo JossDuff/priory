@@ -1,13 +1,61 @@
+use crate::{MyBehaviour, MyBehaviourEvent};
+use anyhow::Result;
+use libp2p::{
+    core::{
+        multiaddr::{Multiaddr, Protocol},
+        ConnectedPoint,
+    },
+    gossipsub, identify, kad, mdns,
+    swarm::{Swarm, SwarmEvent},
+    PeerId,
+};
+use std::collections::HashMap;
+use tokio::sync::{broadcast, mpsc};
+use tracing::{info, warn};
+
+// TODO: use this only if we have multiple instances of diverting from common handler
+// at the time of writing we only have one, so not really worth
+
+// struct EventHandler {
+//     special_handlers:
+//         HashMap<SwarmEvent<MyBehaviour>, Vec<Box<dyn FnMut(&SwarmEvent<MyBehaviour>) -> bool>>>,
+// }
+//
+// struct SpecialHandler<F>
+// where
+//     F: FnMut(&SwarmEvent<MyBehaviour>) -> bool,
+// {
+//     event_type: SwarmEvent<MyBehaviour>,
+//     handler: F,
+// }
+
+impl EventHandler {
+    pub fn handle_swarm_event(&mut self, event: SwarmEvent<MyBehaviourEvent>) {
+        // share a copy of the event with whoever needs it
+        let (event_sender, mut event_receiver) = broadcast::channel(16);
+        let mut event_receiver = event_sender.subscribe();
+        event_sender.send(event);
+
+        common_handler(event);
+    }
+}
+
 // TODO: is it better to take a mut Swarm here or to send Commands??
-pub fn handle_swarm_event(swarm: &mut Swarm<MyBehaviour>) -> Result<()> {
-    match event {
+fn common_handler(
+    // swarm: &mut Swarm<MyBehaviour>,
+    event: SwarmEvent<MyBehaviourEvent>,
+) -> Result<()> {
+    let _ = match event {
         SwarmEvent::NewListenAddr { address, .. } => {
             let p2p_address = address.with(Protocol::P2p(*swarm.local_peer_id()));
             info!("Listening on {p2p_address}");
         }
         SwarmEvent::ConnectionEstablished {
             peer_id,
-        SwarmEvent::ConnectionEstablished { peer_id, endpoint, num_established, ..} => { num_established, ..
+            endpoint,
+            num_established,
+            ..
+        } => {
             info!(%peer_id, ?endpoint, %num_established, "Connection Established");
             // TODO: not sure if I need to add both address and send_back_addr.  Seems to
             // work for now
@@ -24,7 +72,7 @@ pub fn handle_swarm_event(swarm: &mut Swarm<MyBehaviour>) -> Result<()> {
             warn!("Failed to dial {peer_id:?}: {error}");
         }
         SwarmEvent::IncomingConnectionError { error, .. } => {
-            warn!("{:#}", anyhow::Error::from(error))
+            warn!("{:#}", anyhow::Error::from(error));
         }
         SwarmEvent::ConnectionClosed {
             peer_id,
@@ -33,13 +81,13 @@ pub fn handle_swarm_event(swarm: &mut Swarm<MyBehaviour>) -> Result<()> {
             num_established,
             ..
         } => {
-            info!(%peer_id, ?endpoint, %num_established, ?cause, "Connection Closed")
+            info!(%peer_id, ?endpoint, %num_established, ?cause, "Connection Closed");
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Dcutr(event)) => {
-            info!("dcutr: {:?}", event)
+            info!("dcutr: {:?}", event);
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::RelayClient(event)) => {
-            info!("Relay client: {event:?}")
+            info!("Relay client: {event:?}");
         } // SwarmEvent::Behaviour(MyBehaviourEvent::RelayClient(
         //     relay::client::Event::ReservationReqAccepted { .. },
         // )) => {
@@ -55,7 +103,7 @@ pub fn handle_swarm_event(swarm: &mut Swarm<MyBehaviour>) -> Result<()> {
             ..
         })) => {
             tracing::info!(address=%observed_addr, "Relay told us our observed address");
-            swarm.add_external_address(observed_addr)
+            swarm.add_external_address(observed_addr);
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
             for (peer_id, _multiaddr) in list {
@@ -87,12 +135,14 @@ pub fn handle_swarm_event(swarm: &mut Swarm<MyBehaviour>) -> Result<()> {
                 "Got message: '{}' with id: {id} from peer: {peer_id}",
                 // "{}",
                 String::from_utf8_lossy(&message.data),
-            )
+            );
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed {
             peer_id,
             topic: _,
-        })) => info!("{peer_id} subscribed to the topic!",),
+        })) => {
+            info!("{peer_id} subscribed to the topic!");
+        }
 
         SwarmEvent::Behaviour(MyBehaviourEvent::Kademlia(
             kad::Event::OutboundQueryProgressed { result, .. },
@@ -122,7 +172,7 @@ pub fn handle_swarm_event(swarm: &mut Swarm<MyBehaviour>) -> Result<()> {
                     std::str::from_utf8(&value).unwrap(),
                 );
             }
-            kad::QueryResult::GetRecord(Ok(_)) => {}
+            // kad::QueryResult::GetRecord(Ok(_)) => {}
             kad::QueryResult::GetRecord(Err(err)) => {
                 eprintln!("Failed to get record: {err:?}");
             }
@@ -156,46 +206,7 @@ pub fn handle_swarm_event(swarm: &mut Swarm<MyBehaviour>) -> Result<()> {
         })) => {
             info!( peer=%peer, addresses=?addresses, "KAD routing table updated");
         }
-        _ => {}
+        _ => (),
     };
     Ok(())
 }
-
-// TODO: use this only if we have multiple instances of diverting from common handler
-// at the time of writing we only have one, so not really worth
-
-// // this is where we will handle all the events and set special handlers
-// use crate::MyBehaviour;
-// use libp2p::swarm::SwarmEvent;
-//
-// pub struct EventHandler {
-//     special_handler: Option<Box<dyn FnMut(&SwarmEvent<MyBehaviour>) -> bool>>,
-// }
-//
-// struct SpecialHandler<F>
-// where
-//     F: FnMut(&SwarmEvent<MyBehaviour>) -> bool,
-// {
-//     event_type: SwarmEvent<MyBehaviour>,
-//     handler: F,
-// }
-//
-// impl EventHandler {
-//     pub fn handle_event(&mut self, event: SwarmEvent<MyBehaviour>) {
-//         // if there is a special handler set, use it.
-//         // TODO: how to set special handler to None?  Command or are all special handlers one time use?
-//         let handled = if let Some(ref mut special_handler) = self.special_handler {
-//             special_handler(&event)
-//         } else {
-//             false
-//         };
-//
-//         if !handled {
-//             Self::common_handler(event);
-//         }
-//     }
-//
-//     fn common_handler(event: SwarmEvent<MyBehaviour>) {
-//         // TODO: big ass match statement
-//     }
-// }

@@ -28,12 +28,11 @@ use libp2p_kad::store::MemoryStore;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::net::Ipv4Addr;
-use std::time::Duration;
 use tokio::{
     io,
     io::AsyncBufReadExt,
     select,
-    sync::mpsc::Sender,
+    sync::mpsc::{self, Sender},
     time::{sleep, Duration},
 };
 use tracing::{info, warn};
@@ -69,6 +68,12 @@ pub struct MyBehaviour {
     // TODO: can use connection_limits::Behaviour to limit connections by a % of max memory
 }
 
+// P2pNode
+//  swarm
+//  cfg
+//  special_handlers
+// and there's a client that you get that can send shit on the p2p network
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cfg = Config::parse(CONFIG_FILE_PATH)?;
@@ -84,8 +89,8 @@ async fn main() -> Result<()> {
     let (sender, mut receiver) = mpsc::channel(100);
 
     // Bootstrap this node into the network
-    spawn(async move {
-        bootstrap_swarm(sender.clone()).await;
+    tokio::spawn(async move {
+        bootstrap_swarm(&cfg, sender.clone()).await;
     });
 
     // read full lines from stdin
@@ -94,8 +99,8 @@ async fn main() -> Result<()> {
     // let it rip
     loop {
         select! {
-            Some(command) = receiver.recv() => handle_command(&mut swarm, command),
-            event = swarm.select_next_some() => handle_swarm_event(&mut swarm, event),
+            Some(command) = receiver.recv() => handle_command(&mut swarm, &command),
+            event = swarm.select_next_some() => handle_swarm_event(&mut swarm, &event),
             // Writing & line stuff is just for debugging & dev
             Ok(Some(line)) = stdin.next_line() => handle_input_line(&mut swarm, line),
         }
@@ -115,8 +120,10 @@ struct RelayConnections {
 }
 
 // TODO: this is just for dev work
+
 fn handle_input_line(swarm: &mut Swarm<MyBehaviour>, line: String) -> Result<()> {
     return Ok(());
+
     // if let Some(addr) = line.strip_prefix("/bootstrap ") {
     //     let addr: libp2p::Multiaddr = addr.parse()?;
     //     swarm.dial(addr.clone())?;
@@ -146,79 +153,81 @@ fn handle_input_line(swarm: &mut Swarm<MyBehaviour>, line: String) -> Result<()>
     //     warn!("Publish error: {e:?}");
     // }
     // }
-    let mut args = line.split(' ');
-    let kademlia = swamr.behaviour_mut().kademlia;
+    /*
+        let mut args = line.split(' ');
+        let kademlia = swarm.behaviour_mut().kademlia;
 
-    let _ = match args.next() {
-        Some("GET") => {
-            let key = {
-                match args.next() {
-                    Some(key) => kad::RecordKey::new(&key),
-                    None => {
-                        eprintln!("Expected key");
+        let _ = match args.next() {
+            Some("GET") => {
+                let key = {
+                    match args.next() {
+                        Some(key) => kad::RecordKey::new(&key),
+                        None => {
+                            eprintln!("Expected key");
+                        }
                     }
-                }
-            };
-            kademlia.get_record(key);
-        }
-        Some("GET_PROVIDERS") => {
-            let key = {
-                match args.next() {
-                    Some(key) => kad::RecordKey::new(&key),
-                    None => {
-                        eprintln!("Expected key");
+                };
+                kademlia.get_record(key);
+            }
+            Some("GET_PROVIDERS") => {
+                let key = {
+                    match args.next() {
+                        Some(key) => kad::RecordKey::new(&key),
+                        None => {
+                            eprintln!("Expected key");
+                        }
                     }
-                }
-            };
-            kademlia.get_providers(key);
-        }
-        Some("PUT") => {
-            let key = {
-                match args.next() {
-                    Some(key) => kad::RecordKey::new(&key),
-                    None => {
-                        eprintln!("Expected key");
+                };
+                kademlia.get_providers(key);
+            }
+            Some("PUT") => {
+                let key = {
+                    match args.next() {
+                        Some(key) => kad::RecordKey::new(&key),
+                        None => {
+                            eprintln!("Expected key");
+                        }
                     }
-                }
-            };
-            let value = {
-                match args.next() {
-                    Some(value) => value.as_bytes().to_vec(),
-                    None => {
-                        eprintln!("Expected value");
+                };
+                let value = {
+                    match args.next() {
+                        Some(value) => value.as_bytes().to_vec(),
+                        None => {
+                            eprintln!("Expected value");
+                        }
                     }
-                }
-            };
-            let record = kad::Record {
-                key,
-                value,
-                publisher: None,
-                expires: None,
-            };
-            kademlia
-                .put_record(record, kad::Quorum::One)
-                .expect("Failed to store record locally.");
-        }
-        Some("PUT_PROVIDER") => {
-            let key = {
-                match args.next() {
-                    Some(key) => kad::RecordKey::new(&key),
-                    None => {
-                        eprintln!("Expected key");
+                };
+                let record = kad::Record {
+                    key,
+                    value,
+                    publisher: None,
+                    expires: None,
+                };
+                kademlia
+                    .put_record(record, kad::Quorum::One)
+                    .expect("Failed to store record locally.");
+            }
+            Some("PUT_PROVIDER") => {
+                let key = {
+                    match args.next() {
+                        Some(key) => kad::RecordKey::new(&key),
+                        None => {
+                            eprintln!("Expected key");
+                        }
                     }
-                }
-            };
+                };
 
-            kademlia
-                .start_providing(key)
-                .expect("Failed to start providing key");
-        }
-        _ => {
-            eprintln!("expected GET, GET_PROVIDERS, PUT or PUT_PROVIDER");
-        }
-    };
+                kademlia
+                    .start_providing(key)
+                    .expect("Failed to start providing key");
+            }
+            _ => {
+                eprintln!("expected GET, GET_PROVIDERS, PUT or PUT_PROVIDER");
+            }
+        };
 
-    Ok(())
+        Ok(())
+    */
 }
 
 fn handle_message(
@@ -226,6 +235,7 @@ fn handle_message(
     propagation_source: PeerId,
     message: Message,
     topic: IdentTopic,
+    // TODO: return type
 ) -> () {
     let message = String::from_utf8_lossy(&message.data);
 
@@ -337,7 +347,7 @@ fn build_swarm(cfg: &Config) -> Result<Swarm<MyBehaviour>> {
     Ok(swarm)
 }
 
-async fn bootstrap_swarm(sender: Sender<Command>) -> Result<()> {
+async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()> {
     // create a gossipsub topic
     let topic = gossipsub::IdentTopic::new(GOSSIPSUB_TOPIC);
 
@@ -371,7 +381,7 @@ async fn bootstrap_swarm(sender: Sender<Command>) -> Result<()> {
 
     // Wait to listen on all interfaces.
     // Likely listening on all interfaces after a second.
-    sleep(Duration::from_secs(1)).await.unwrap();
+    sleep(Duration::from_secs(1)).await;
 
     // keep track of the nodes that we'll later have to hole punch into
     let mut failed_to_dial: Vec<Multiaddr> = Vec::new();
@@ -444,7 +454,7 @@ async fn bootstrap_swarm(sender: Sender<Command>) -> Result<()> {
         let query = format!("{WANT_RELAY_FOR_PREFIX}{peer_id}");
         sender
             .send(Command::GossipsubPublish {
-                topic,
+                topic: topic.into(),
                 data: query.into(),
             })
             .await
