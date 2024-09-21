@@ -368,6 +368,8 @@ fn build_swarm(cfg: &Config) -> Result<Swarm<MyBehaviour>> {
 }
 
 async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()> {
+    // TODO: don't set this in the function cause it can return early because of a '?' and won't
+    // ever be set to false cause it won't reach the end
     sender
         .send(Command::UpdateBootstrappingStatus {
             is_bootstrapping: true,
