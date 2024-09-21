@@ -44,6 +44,7 @@ use config::Config;
 mod command;
 use command::{handle_command, Command};
 mod event_handler;
+use event_handler::handle_swarm_event;
 
 const AM_RELAY_FOR_PREFIX: &str = "AM RELAY FOR ";
 const WANT_RELAY_FOR_PREFIX: &str = "WANT RELAY FOR ";
@@ -68,11 +69,50 @@ pub struct MyBehaviour {
     // TODO: can use connection_limits::Behaviour to limit connections by a % of max memory
 }
 
-// P2pNode
-//  swarm
-//  cfg
-//  special_handlers
-// and there's a client that you get that can send shit on the p2p network
+pub struct P2pNode {
+    swarm: Swarm<MyBehaviour>,
+    cfg: Config,
+    is_bootstrapping: bool, // TODO: something to send and receive messages on the gossipsub channel
+}
+
+impl P2pNode {
+    pub fn new(cfg: Config) -> Result<Self> {
+        let swarm = build_swarm(&cfg)?;
+        // starts as false, is set to true inside `boostrap_swarm()`
+        let is_bootstrapping = false;
+
+        Ok(Self {
+            swarm,
+            cfg,
+            is_bootstrapping,
+        })
+    }
+
+    pub async fn run(&mut self) -> Result<()> {
+        let (sender, mut receiver) = mpsc::channel(100);
+
+        // Bootstrap this node into the network
+        tokio::spawn(async move {
+            bootstrap_swarm(&self.cfg, sender.clone()).await;
+        });
+
+        // read full lines from stdin
+        let mut stdin = io::BufReader::new(io::stdin()).lines();
+
+        let swarm = &self.swarm;
+        // let it rip
+        loop {
+            select! {
+                Some(command) = receiver.recv() => handle_command(&mut self, command),
+                event = swarm.select_next_some() => handle_swarm_event(&mut swarm, event),
+                // Writing & line stuff is just for debugging & dev
+                Ok(Some(line)) = stdin.next_line() => handle_input_line(&mut self.swarm, line),
+            };
+        }
+    }
+
+    // pub fn send_message()
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -85,26 +125,6 @@ async fn main() -> Result<()> {
         .try_init();
 
     let swarm = build_swarm(&cfg)?;
-
-    let (sender, mut receiver) = mpsc::channel(100);
-
-    // Bootstrap this node into the network
-    tokio::spawn(async move {
-        bootstrap_swarm(&cfg, sender.clone()).await;
-    });
-
-    // read full lines from stdin
-    let mut stdin = io::BufReader::new(io::stdin()).lines();
-
-    // let it rip
-    loop {
-        select! {
-            Some(command) = receiver.recv() => handle_command(&mut swarm, &command),
-            event = swarm.select_next_some() => handle_swarm_event(&mut swarm, &event),
-            // Writing & line stuff is just for debugging & dev
-            Ok(Some(line)) = stdin.next_line() => handle_input_line(&mut swarm, line),
-        }
-    }
 }
 
 fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
@@ -348,6 +368,13 @@ fn build_swarm(cfg: &Config) -> Result<Swarm<MyBehaviour>> {
 }
 
 async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()> {
+    sender
+        .send(Command::UpdateBootstrappingStatus {
+            is_bootstrapping: true,
+        })
+        .await
+        .unwrap();
+
     // create a gossipsub topic
     let topic = gossipsub::IdentTopic::new(GOSSIPSUB_TOPIC);
 
@@ -547,5 +574,12 @@ async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()> {
     }
 
     // TODO: connect to some random amount of other nodes ??
+    //
+    sender
+        .send(Command::UpdateBootstrappingStatus {
+            is_bootstrapping: false,
+        })
+        .await
+        .unwrap();
     Ok(())
 }

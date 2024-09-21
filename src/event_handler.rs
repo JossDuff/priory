@@ -1,4 +1,4 @@
-use crate::{MyBehaviour, MyBehaviourEvent};
+use crate::{MyBehaviour, MyBehaviourEvent, P2pNode};
 use anyhow::Result;
 use libp2p::{
     core::{
@@ -9,40 +9,11 @@ use libp2p::{
     swarm::{Swarm, SwarmEvent},
     PeerId,
 };
-use std::collections::HashMap;
-use tokio::sync::{broadcast, mpsc};
 use tracing::{info, warn};
 
-// TODO: use this only if we have multiple instances of diverting from common handler
-// at the time of writing we only have one, so not really worth
-
-// struct EventHandler {
-//     special_handlers:
-//         HashMap<SwarmEvent<MyBehaviour>, Vec<Box<dyn FnMut(&SwarmEvent<MyBehaviour>) -> bool>>>,
-// }
-//
-// struct SpecialHandler<F>
-// where
-//     F: FnMut(&SwarmEvent<MyBehaviour>) -> bool,
-// {
-//     event_type: SwarmEvent<MyBehaviour>,
-//     handler: F,
-// }
-
-impl EventHandler {
-    pub fn handle_swarm_event(&mut self, event: SwarmEvent<MyBehaviourEvent>) {
-        // share a copy of the event with whoever needs it
-        let (event_sender, mut event_receiver) = broadcast::channel(16);
-        let mut event_receiver = event_sender.subscribe();
-        event_sender.send(event);
-
-        common_handler(event);
-    }
-}
-
 // TODO: is it better to take a mut Swarm here or to send Commands??
-fn common_handler(
-    // swarm: &mut Swarm<MyBehaviour>,
+pub fn handle_swarm_event(
+    swarm: &mut Swarm<MyBehaviour>,
     event: SwarmEvent<MyBehaviourEvent>,
 ) -> Result<()> {
     let _ = match event {

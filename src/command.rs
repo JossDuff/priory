@@ -1,4 +1,4 @@
-use crate::MyBehaviour;
+use crate::{MyBehaviour, P2pNode};
 use anyhow::Result;
 use libp2p::{
     core::multiaddr::Multiaddr,
@@ -46,10 +46,13 @@ pub enum Command {
     IsRelayEnabled {
         sender: oneshot::Sender<bool>,
     },
-    ShareEvents {},
+    UpdateBootstrappingStatus {
+        is_bootstrapping: bool,
+    },
 }
 
-pub fn handle_command(swarm: &mut Swarm<MyBehaviour>, command: Command) -> Result<()> {
+pub fn handle_command(p2p_node: &mut P2pNode, command: Command) -> Result<()> {
+    let swarm = &mut p2p_node.swarm;
     let _ = match command {
         // Gossipsub commands
         Command::GossipsubPublish { topic, data } => {
@@ -97,9 +100,9 @@ pub fn handle_command(swarm: &mut Swarm<MyBehaviour>, command: Command) -> Resul
                 .send(swarm.behaviour().toggle_relay.is_enabled())
                 .unwrap();
         }
-        // share a copy of the event stream
-        Command::ShareEvents {} => {
-            todo!()
+        // Update the status of bootsrapping
+        Command::UpdateBootstrappingStatus { is_bootstrapping } => {
+            p2p_node.is_bootstrapping = is_bootstrapping;
         }
     };
 
