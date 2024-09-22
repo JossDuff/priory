@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures::{executor::block_on, stream::StreamExt};
 use libp2p::{
     core::{
@@ -11,16 +11,18 @@ use libp2p::{
 };
 use std::net::Ipv4Addr;
 use tokio::{
-    sync::mpsc::{self, Sender},
+    sync::mpsc::{self, Receiver, Sender},
     time::{sleep, Duration},
 };
 use tracing::{info, warn};
 
 use crate::command::Command;
 use crate::config::Config;
-use crate::{MyBehaviour, MyBehaviourEvent}
+use crate::{MyBehaviour, MyBehaviourEvent};
 
 const GOSSIPSUB_TOPIC: &str = "test-net";
+const WANT_RELAY_FOR_PREFIX: &str = "WANT RELAY FOR ";
+const AM_RELAY_FOR_PREFIX: &str = "AM RELAY FOR ";
 
 // These are the events that we need some information from during bootstrapping.
 // When encountered in the main thread, the specified data is copied here and the
@@ -58,17 +60,25 @@ impl BootstrapEvent {
                 propagation_source,
                 message,
             }),
-            SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {..})) => Some(BootstrapEvent::IdentifySent),
-            SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {..})) => Some(BootstrapEvent::IdentifyReceived),
+            SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent { .. })) => {
+                Some(BootstrapEvent::IdentifySent)
+            }
+            SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
+                ..
+            })) => Some(BootstrapEvent::IdentifyReceived),
             _ => None,
         }
     }
 }
 
-pub async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()> {
+pub async fn bootstrap_swarm(
+    cfg: &Config,
+    command_sender: Sender<Command>,
+    event_receiver: Receiver<BootstrapEvent>,
+) -> Result<()> {
     // TODO: don't set this in the function cause it can return early because of a '?' and won't
     // ever be set to false cause it won't reach the end
-    sender
+    command_sender
         .send(Command::UpdateBootstrappingStatus {
             is_bootstrapping: true,
         })
@@ -79,7 +89,7 @@ pub async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()
     let topic = gossipsub::IdentTopic::new(GOSSIPSUB_TOPIC);
 
     // subscribes to our IdentTopic
-    sender
+    command_sender
         .send(Command::GossipsubSubscribe { topic })
         .await
         .unwrap();
@@ -88,7 +98,7 @@ pub async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()
     let listen_addr_tcp = Multiaddr::empty()
         .with(Protocol::from(Ipv4Addr::UNSPECIFIED))
         .with(Protocol::Tcp(cfg.port));
-    sender
+    command_sender
         .send(Command::ListenOn {
             multiaddr: listen_addr_tcp,
         })
@@ -99,7 +109,7 @@ pub async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()
         .with(Protocol::from(Ipv4Addr::UNSPECIFIED))
         .with(Protocol::Udp(cfg.port))
         .with(Protocol::QuicV1);
-    sender
+    command_sender
         .send(Command::ListenOn {
             multiaddr: listen_addr_quic,
         })
@@ -118,41 +128,35 @@ pub async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()
         // dial peer
         // if successful add to DHT
         // if failure wait until we've made contact with the dht and find a peer to holepunch
-        sender
+        command_sender
             .send(Command::Dial {
                 multiaddr: peer_multiaddr,
             })
             .await
             .unwrap();
 
+        // loop until we either connect or fail to connect
         loop {
             // TODO: could we get these events from other sources than the above dial?  Should we
             // be checking that the dialed multiaddr is the one we established connection with?
-            match swarm.next().await.unwrap() {
-                SwarmEvent::ConnectionEstablished {
-                    peer_id, endpoint, ..
-                } => {
-                    // initial dial was successful
-                    let peer_multiaddr = match endpoint {
-                        ConnectedPoint::Dialer { address, .. } => address,
-                        ConnectedPoint::Listener { send_back_addr, .. } => send_back_addr,
-                    };
-                    swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .add_address(&peer_id, peer_multiaddr);
-
-                    info!(multiaddr=%multiaddr, "initial dial success!");
-
+            match event_receiver
+                .recv()
+                .await
+                .context("event sender shouldn't drop")
+                .unwrap()
+            {
+                BootstrapEvent::ConnectionEstablished { .. } => {
+                    // TODO: have to make sure this event is about the node we just dialed
                     break;
                 }
-                SwarmEvent::OutgoingConnectionError { error, .. } => {
-                    // initial dial was a failure.  Will probably have to hole punch
-                    warn!(multiaddr=%multiaddr, error=?error, "initial dial failure");
-                    failed_to_dial.push(multiaddr);
+
+                BootstrapEvent::OutgoingConnectionError { .. } => {
+                    // TODO: have to make sure this event is about the node we just dialed
+                    failed_to_dial.push(peer_multiaddr);
                     break;
                 }
-                unhandled_event => panic!("unhandled event {:?}", unhandled_event),
+                // ignore other events
+                _ => (),
             }
         }
     }
@@ -164,7 +168,10 @@ pub async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()
 
     // TODO: should we handle the [`Event::OutboundQueryProgressed{QueryResult::Bootstrap}`]?? Or
     // at least wait for it to finish.
-    sender.send(Command::KademliaBootstrap).await.unwrap();
+    command_sender
+        .send(Command::KademliaBootstrap)
+        .await
+        .unwrap();
 
     // TODO: failed_to_dial was initially multiaddrs.  We need to get the peerIds somehow.  Maybe
     // we can get them from the relay that claims to know the peer we want to dial?
@@ -179,7 +186,7 @@ pub async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()
     // all events?? Hmmm
     for peer_id in failed_to_dial {
         let query = format!("{WANT_RELAY_FOR_PREFIX}{peer_id}");
-        sender
+        command_sender
             .send(Command::GossipsubPublish {
                 topic: topic.into(),
                 data: query.into(),
@@ -188,15 +195,19 @@ pub async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()
             .unwrap();
 
         // Wait until we hear a response from a relay claiming they know this peer_id (or timeout)
-        let relay_address = block_on(async {
-            let mut timeout = futures_timer::Delay::new(std::time::Duration::from_secs(120)).fuse();
-            loop {
-                futures::select! {
-                event = swarm.next() => {
-                    if let SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
-                        propagation_source: peer_id,
-                        message, ..
-                })) = event.unwrap() {
+        let mut relay_address;
+        // TODO: timeout, don't have relay_address be mutable
+        loop {
+            match event_receiver
+                .recv()
+                .await
+                .context("event sender shouldn't drop")
+                .unwrap()
+            {
+                BootstrapEvent::GossipsubMessage {
+                    propagation_source: peer_id,
+                    message,
+                } => {
                     let message = String::from_utf8_lossy(&message.data);
                     if let Some(str) = message.strip_prefix(AM_RELAY_FOR_PREFIX) {
                         let str: Vec<&str> = str.split(" ").collect();
@@ -209,20 +220,16 @@ pub async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()
 
                         // if the relay is talking about the node we care about, return the relay's address
                         if target_peer_id == peer_id {
-                            return relay_multiaddr;
+                            relay_address = relay_multiaddr;
+                            break;
                         }
                     }
                 }
-                }
-                _ = timeout => {
-                    // TODO: what to do if nobody has this node?
-                    panic!("timed out while waiting to hear response for a relay who knows of our target node")
-                }
-                }
+                _ => (),
             }
-        });
+        }
 
-        sender
+        command_sender
             .send(Command::Dial {
                 multiaddr: relay_address,
             })
@@ -230,29 +237,25 @@ pub async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()
             .unwrap();
 
         // we need to know our external IP so we can tell the other node who to holepunch to
+        // TODO: a timeout here and also decide if we need block_on
         block_on(async {
             let mut learned_observed_addr = false;
             let mut told_relay_observed_addr = false;
 
             loop {
-                match swarm.next().await.unwrap() {
-                    SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {
-                        ..
-                    })) => {
-                        tracing::info!("Told relay its public address");
+                match event_receiver
+                    .recv()
+                    .await
+                    .context("event sender shouldn't drop")
+                    .unwrap()
+                {
+                    BootstrapEvent::IdentifySent => {
                         told_relay_observed_addr = true;
                     }
-                    SwarmEvent::Behaviour(MyBehaviourEvent::Identify(
-                        identify::Event::Received {
-                            info: identify::Info { observed_addr, .. },
-                            ..
-                        },
-                    )) => {
-                        tracing::info!(address=%observed_addr, "Relay told us our observed address");
+                    BootstrapEvent::IdentifyReceived => {
                         learned_observed_addr = true;
-                        swarm.add_external_address(observed_addr)
                     }
-                    _ => {}
+                    _ => (),
                 }
 
                 if learned_observed_addr && told_relay_observed_addr {
@@ -261,21 +264,27 @@ pub async fn bootstrap_swarm(cfg: &Config, sender: Sender<Command>) -> Result<()
             }
         });
 
-        // listen mode as well
+        // listen to the dialed relay as well
         let multiaddr = relay_address.with(Protocol::P2pCircuit);
-        sender.send(Command::ListenOn { multiaddr }).await.unwrap();
+        command_sender
+            .send(Command::ListenOn { multiaddr })
+            .await
+            .unwrap();
 
         // attempt to hole punch to the node we failed to dial earlier
-        let mutliaddr = relay_address
+        let multiaddr = relay_address
             .with(Protocol::P2pCircuit)
             .with(Protocol::P2p(peer_id));
-        sender.send(Command::Dial { multiaddr }).await.unwrap();
+        command_sender
+            .send(Command::Dial { multiaddr })
+            .await
+            .unwrap();
         info!(peer = ?peer_id, "Attempting to hole punch");
     }
 
     // TODO: connect to some random amount of other nodes ??
-    //
-    sender
+
+    command_sender
         .send(Command::UpdateBootstrappingStatus {
             is_bootstrapping: false,
         })
