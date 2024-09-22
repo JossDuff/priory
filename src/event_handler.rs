@@ -8,11 +8,21 @@ use libp2p::{
     gossipsub, identify, kad, mdns,
     swarm::{Swarm, SwarmEvent},
     PeerId,
-};
+};use tokio::sync::broadcast;
 use tracing::{info, warn};
 
+pub fn handle_swarm_event(&mut Swarm<MyBehaviour>, event:SwarmEvent<MyBehaviourEvent>) -> Result<()> {
+    let (sender, receiver) = broadcast::channel(16);
+
+    match event {
+        cloneable_event=>  
+        // sender.send(event)
+        
+    }
+}
+
 // TODO: is it better to take a mut Swarm here or to send Commands??
-pub fn handle_swarm_event(
+pub fn handle_common_event(
     swarm: &mut Swarm<MyBehaviour>,
     event: SwarmEvent<MyBehaviourEvent>,
 ) -> Result<()> {
