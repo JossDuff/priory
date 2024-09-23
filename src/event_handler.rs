@@ -2,16 +2,12 @@ use crate::bootstrap::BootstrapEvent;
 use crate::{MyBehaviour, MyBehaviourEvent, P2pNode, AM_RELAY_FOR_PREFIX, WANT_RELAY_FOR_PREFIX};
 use anyhow::Result;
 use libp2p::{
-    core::{
-        multiaddr::{Multiaddr, Protocol},
-        ConnectedPoint,
-    },
+    core::{multiaddr::Protocol, ConnectedPoint},
     gossipsub::{self, IdentTopic, Message},
     identify, kad, mdns,
     swarm::{Swarm, SwarmEvent},
-    PeerId,
 };
-use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::mpsc::Sender;
 use tracing::{info, warn};
 
 pub async fn handle_swarm_event(
@@ -115,11 +111,11 @@ pub fn handle_common_event(
             }
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
-            propagation_source: peer_id,
-            message_id: id,
+            propagation_source: _peer_id,
+            message_id: _id,
             message,
         })) => {
-            handle_message(swarm, message, topic);
+            handle_message(swarm, message, topic).unwrap();
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed {
             peer_id,

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use futures::{executor::block_on, stream::StreamExt};
+use futures::executor::block_on;
 use libp2p::{
     core::{
         multiaddr::{Multiaddr, Protocol},
@@ -7,20 +7,18 @@ use libp2p::{
     },
     gossipsub::{self, Message},
     identify,
-    swarm::{DialError, SwarmEvent},
+    swarm::SwarmEvent,
 };
 use std::net::Ipv4Addr;
 use tokio::{
-    sync::mpsc::{self, Receiver, Sender},
+    sync::mpsc::{Receiver, Sender},
     time::{sleep, Duration},
 };
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::command::Command;
 use crate::config::Config;
-use crate::{
-    MyBehaviour, MyBehaviourEvent, AM_RELAY_FOR_PREFIX, GOSSIPSUB_TOPIC, WANT_RELAY_FOR_PREFIX,
-};
+use crate::{MyBehaviourEvent, AM_RELAY_FOR_PREFIX, WANT_RELAY_FOR_PREFIX};
 
 // These are the events that we need some information from during bootstrapping.
 // When encountered in the main thread, the specified data is copied here and the
@@ -32,7 +30,6 @@ pub enum BootstrapEvent {
     },
     OutgoingConnectionError,
     GossipsubMessage {
-        propagation_source: PeerId,
         message: Message,
     },
     IdentifySent,
@@ -45,18 +42,16 @@ impl BootstrapEvent {
             SwarmEvent::ConnectionEstablished {
                 peer_id, endpoint, ..
             } => Some(BootstrapEvent::ConnectionEstablished {
-                peer_id: peer_id.clone(),
+                peer_id: *peer_id,
                 endpoint: endpoint.clone(),
             }),
             SwarmEvent::OutgoingConnectionError { .. } => {
                 Some(BootstrapEvent::OutgoingConnectionError)
             }
             SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
-                propagation_source,
                 message,
                 ..
             })) => Some(BootstrapEvent::GossipsubMessage {
-                propagation_source: propagation_source.clone(),
                 message: message.clone(),
             }),
             SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent { .. })) => {
@@ -76,9 +71,6 @@ pub async fn bootstrap_swarm(
     event_receiver: &mut Receiver<BootstrapEvent>,
     topic: gossipsub::IdentTopic,
 ) -> Result<()> {
-    // create a gossipsub topic
-    let topic = gossipsub::IdentTopic::new(GOSSIPSUB_TOPIC);
-
     // subscribes to our IdentTopic
     command_sender
         .send(Command::GossipsubSubscribe {
@@ -189,36 +181,30 @@ pub async fn bootstrap_swarm(
 
         // Wait until we hear a response from a relay claiming they know this peer_id (or timeout)
         let relay_address;
-        // TODO: timeout, don't have relay_address be mutable
+        // TODO: add a timeout (in case nobody is connected to this node) and don't have relay_address be mutable
         loop {
-            match event_receiver
+            if let BootstrapEvent::GossipsubMessage { message, .. } = event_receiver
                 .recv()
                 .await
                 .context("event sender shouldn't drop")
                 .unwrap()
             {
-                BootstrapEvent::GossipsubMessage {
-                    propagation_source: peer_id,
-                    message,
-                } => {
-                    let message = String::from_utf8_lossy(&message.data);
-                    if let Some(str) = message.strip_prefix(AM_RELAY_FOR_PREFIX) {
-                        let str: Vec<&str> = str.split(" ").collect();
-                        assert!(
-                            str.len() == 2,
-                            "claims to be relay for an address but returned incorrect info"
-                        );
-                        let target_peer_id: PeerId = str[0].parse().unwrap();
-                        let relay_multiaddr: Multiaddr = str[1].parse().unwrap();
+                let message = String::from_utf8_lossy(&message.data);
+                if let Some(str) = message.strip_prefix(AM_RELAY_FOR_PREFIX) {
+                    let str: Vec<&str> = str.split(" ").collect();
+                    assert!(
+                        str.len() == 2,
+                        "claims to be relay for an address but returned incorrect info"
+                    );
+                    let target_peer_id: PeerId = str[0].parse().unwrap();
+                    let relay_multiaddr: Multiaddr = str[1].parse().unwrap();
 
-                        // if the relay is talking about the node we care about, return the relay's address
-                        if target_peer_id == peer_id {
-                            relay_address = relay_multiaddr;
-                            break;
-                        }
+                    // if the relay is talking about the node we care about, return the relay's address
+                    if target_peer_id == peer_id {
+                        relay_address = relay_multiaddr;
+                        break;
                     }
                 }
-                _ => (),
             }
         }
 

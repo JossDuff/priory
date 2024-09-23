@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 /**
 
 TODO:
@@ -12,30 +12,22 @@ TODO:
 [] all levels of tracing logs.  Re-read zero-to-prod logging approach
 [] auto bootstrap when it hits a certain low threshold or receives some error (not enough peers, etc)
 **/
-use futures::{executor::block_on, stream::StreamExt};
+use futures::stream::StreamExt;
 use libp2p::{
-    core::{
-        multiaddr::{Multiaddr, Protocol},
-        ConnectedPoint, PeerId,
-    },
-    dcutr, gossipsub,
-    gossipsub::{IdentTopic, Message},
-    identify, identity, kad, mdns, noise, relay,
-    swarm::{behaviour::toggle::Toggle, NetworkBehaviour, SwarmEvent},
+    dcutr, gossipsub, identify, identity, kad, mdns, noise, relay,
+    swarm::{behaviour::toggle::Toggle, NetworkBehaviour},
     tcp, yamux, Swarm,
 };
 use libp2p_kad::store::MemoryStore;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::net::Ipv4Addr;
 use tokio::{
     io,
     io::AsyncBufReadExt,
     select,
-    sync::mpsc::{self, Sender},
-    time::{sleep, Duration},
+    sync::mpsc::{self},
+    time::Duration,
 };
-use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 mod config;
@@ -45,7 +37,7 @@ mod bootstrap;
 use bootstrap::bootstrap_swarm;
 
 mod command;
-use command::{handle_command, Command};
+use command::handle_command;
 mod event_handler;
 use event_handler::handle_swarm_event;
 
@@ -98,7 +90,9 @@ impl P2pNode {
         let topic = self.topic.clone();
         tokio::spawn(async move {
             // TODO: handle result
-            bootstrap_swarm(cfg, command_sender.clone(), &mut event_receiver, topic).await;
+            bootstrap_swarm(cfg, command_sender.clone(), &mut event_receiver, topic)
+                .await
+                .unwrap();
             // TODO: is this kosher?  We want to drop it when we're done bootstrapping so
             // event_handler doesn't try to send any more events over this channel
             drop(event_receiver);
@@ -110,10 +104,10 @@ impl P2pNode {
         // let it rip
         loop {
             select! {
-                Some(command) = command_receiver.recv() => handle_command(self, command),
-                event = self.swarm.select_next_some() => handle_swarm_event(self, event, &event_sender).await,
+                Some(command) = command_receiver.recv() => handle_command(self, command).unwrap(),
+                event = self.swarm.select_next_some() => handle_swarm_event(self, event, &event_sender).await.unwrap(),
                 // Writing & line stuff is just for debugging & dev
-                Ok(Some(line)) = stdin.next_line() => handle_input_line(&mut self.swarm, line),
+                Ok(Some(line)) = stdin.next_line() => handle_input_line(&mut self.swarm, line).unwrap(),
             };
         }
     }
@@ -131,7 +125,7 @@ async fn main() -> Result<()> {
 
     let mut p2p_node = P2pNode::new(cfg)?;
 
-    p2p_node.run();
+    p2p_node.run().await?;
 
     Ok(())
 }
@@ -143,16 +137,9 @@ fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
     identity::Keypair::ed25519_from_bytes(bytes).expect("only errors on wrong length")
 }
 
-struct RelayConnections {
-    pub multiaddr: Multiaddr,
-    pub connections: Vec<PeerId>,
-}
-
 // TODO: this is just for dev work
 
-fn handle_input_line(swarm: &mut Swarm<MyBehaviour>, line: String) -> Result<()> {
-    return Ok(());
-
+fn handle_input_line(_swarm: &mut Swarm<MyBehaviour>, _line: String) -> Result<()> {
     // if let Some(addr) = line.strip_prefix("/bootstrap ") {
     //     let addr: libp2p::Multiaddr = addr.parse()?;
     //     swarm.dial(addr.clone())?;
@@ -171,16 +158,21 @@ fn handle_input_line(swarm: &mut Swarm<MyBehaviour>, line: String) -> Result<()>
     //     // Q: will gossipsub auto holepunch for us when a new node joins the network?
     //     swarm
     //         .dial(
-    //             relay_addr.clone()
+    //             relay_addr
+    //                 .clone()
     //                 .with(Protocol::P2pCircuit)
     //                 .with(Protocol::P2p(remote_peer_id)),
     //         )
     //         .unwrap();
     // } else {
-    // let line = format!("{username}: {line}");
-    // if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), line.as_bytes()) {
-    //     warn!("Publish error: {e:?}");
-    // }
+    //     let line = format!("{username}: {line}");
+    //     if let Err(e) = swarm
+    //         .behaviour_mut()
+    //         .gossipsub
+    //         .publish(topic.clone(), line.as_bytes())
+    //     {
+    //         warn!("Publish error: {e:?}");
+    //     }
     // }
     /*
         let mut args = line.split(' ');
@@ -257,6 +249,7 @@ fn handle_input_line(swarm: &mut Swarm<MyBehaviour>, line: String) -> Result<()>
 
         Ok(())
     */
+    Ok(())
 }
 
 fn build_swarm(cfg: &Config) -> Result<Swarm<MyBehaviour>> {

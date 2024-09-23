@@ -1,5 +1,5 @@
 use anyhow::Result;
-use libp2p::{multiaddr::Multiaddr, PeerId};
+use libp2p::multiaddr::Multiaddr;
 use serde::Deserialize;
 use std::fs;
 
