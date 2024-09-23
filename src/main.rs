@@ -51,6 +51,9 @@ use event_handler::handle_swarm_event;
 
 const IDENTIFY_PROTOCOL_VERSION: &str = "TODO/0.0.1";
 const CONFIG_FILE_PATH: &str = "priory.toml";
+pub const GOSSIPSUB_TOPIC: &str = "test-net";
+pub const WANT_RELAY_FOR_PREFIX: &str = "WANT RELAY FOR ";
+pub const AM_RELAY_FOR_PREFIX: &str = "AM RELAY FOR ";
 
 // custom network behavious that combines gossipsub and mdns
 #[derive(NetworkBehaviour)]
@@ -71,16 +74,18 @@ pub struct MyBehaviour {
 
 pub struct P2pNode {
     swarm: Swarm<MyBehaviour>,
+    topic: gossipsub::IdentTopic,
     cfg: Config,
 }
 
 impl P2pNode {
     pub fn new(cfg: Config) -> Result<Self> {
         let swarm = build_swarm(&cfg)?;
-        // starts as false, is set to true inside `boostrap_swarm()`
-        let is_bootstrapping = false;
 
-        Ok(Self { swarm, cfg })
+        // create a gossipsub topic
+        let topic = gossipsub::IdentTopic::new(GOSSIPSUB_TOPIC);
+
+        Ok(Self { swarm, topic, cfg })
     }
 
     pub async fn run(&mut self) -> Result<()> {
@@ -90,8 +95,13 @@ impl P2pNode {
 
         // Bootstrap this node into the network
         let cfg = self.cfg.clone();
+        let topic = self.topic.clone();
         tokio::spawn(async move {
-            bootstrap_swarm(cfg, command_sender.clone(), &mut event_receiver).await;
+            // TODO: handle result
+            bootstrap_swarm(cfg, command_sender.clone(), &mut event_receiver, topic).await;
+            // TODO: is this kosher?  We want to drop it when we're done bootstrapping so
+            // event_handler doesn't try to send any more events over this channel
+            drop(event_receiver);
         });
 
         // read full lines from stdin
@@ -115,13 +125,13 @@ impl P2pNode {
 async fn main() -> Result<()> {
     let cfg = Config::parse(CONFIG_FILE_PATH)?;
 
-    let username = cfg.name;
-
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .try_init();
 
-    let swarm = build_swarm(&cfg)?;
+    let mut p2p_node = P2pNode::new(cfg)?;
+
+    p2p_node.run();
 
     Ok(())
 }
@@ -247,38 +257,6 @@ fn handle_input_line(swarm: &mut Swarm<MyBehaviour>, line: String) -> Result<()>
 
         Ok(())
     */
-}
-
-fn handle_message(
-    swarm: &mut Swarm<MyBehaviour>,
-    propagation_source: PeerId,
-    message: Message,
-    topic: IdentTopic,
-    // TODO: return type
-) -> () {
-    let message = String::from_utf8_lossy(&message.data);
-
-    // respond to the request if we're a willing relay
-    if let Some(target_peer_id) = message.strip_prefix(WANT_RELAY_FOR_PREFIX) {
-        // TODO: determine if target_peer_id is listening to us
-        let connected_to_target_peer = true;
-        // TODO: get my multiaddr
-        let my_multiaddress = Multiaddr::empty();
-        let is_relay = swarm.behaviour().toggle_relay.is_enabled();
-
-        // broadcast that you're a relay for the target_peer_id
-        if is_relay && connected_to_target_peer {
-            let response = format!("{AM_RELAY_FOR_PREFIX}{target_peer_id} {my_multiaddress}");
-
-            if let Err(e) = swarm
-                .behaviour_mut()
-                .gossipsub
-                .publish(topic, response.as_bytes())
-            {
-                warn!("Publish error: {e:?}");
-            }
-        }
-    }
 }
 
 fn build_swarm(cfg: &Config) -> Result<Swarm<MyBehaviour>> {

@@ -18,11 +18,9 @@ use tracing::{info, warn};
 
 use crate::command::Command;
 use crate::config::Config;
-use crate::{MyBehaviour, MyBehaviourEvent};
-
-const GOSSIPSUB_TOPIC: &str = "test-net";
-const WANT_RELAY_FOR_PREFIX: &str = "WANT RELAY FOR ";
-const AM_RELAY_FOR_PREFIX: &str = "AM RELAY FOR ";
+use crate::{
+    MyBehaviour, MyBehaviourEvent, AM_RELAY_FOR_PREFIX, GOSSIPSUB_TOPIC, WANT_RELAY_FOR_PREFIX,
+};
 
 // These are the events that we need some information from during bootstrapping.
 // When encountered in the main thread, the specified data is copied here and the
@@ -32,9 +30,7 @@ pub enum BootstrapEvent {
         peer_id: PeerId,
         endpoint: ConnectedPoint,
     },
-    OutgoingConnectionError {
-        error: DialError,
-    },
+    OutgoingConnectionError,
     GossipsubMessage {
         propagation_source: PeerId,
         message: Message,
@@ -52,10 +48,8 @@ impl BootstrapEvent {
                 peer_id: peer_id.clone(),
                 endpoint: endpoint.clone(),
             }),
-            SwarmEvent::OutgoingConnectionError { error, .. } => {
-                Some(BootstrapEvent::OutgoingConnectionError {
-                    error: error.clone(),
-                })
+            SwarmEvent::OutgoingConnectionError { .. } => {
+                Some(BootstrapEvent::OutgoingConnectionError)
             }
             SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
                 propagation_source,
@@ -80,6 +74,7 @@ pub async fn bootstrap_swarm(
     cfg: Config,
     command_sender: Sender<Command>,
     event_receiver: &mut Receiver<BootstrapEvent>,
+    topic: gossipsub::IdentTopic,
 ) -> Result<()> {
     // create a gossipsub topic
     let topic = gossipsub::IdentTopic::new(GOSSIPSUB_TOPIC);

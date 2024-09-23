@@ -1,12 +1,13 @@
 use crate::bootstrap::BootstrapEvent;
-use crate::{MyBehaviour, MyBehaviourEvent, P2pNode};
+use crate::{MyBehaviour, MyBehaviourEvent, P2pNode, AM_RELAY_FOR_PREFIX, WANT_RELAY_FOR_PREFIX};
 use anyhow::Result;
 use libp2p::{
     core::{
         multiaddr::{Multiaddr, Protocol},
         ConnectedPoint,
     },
-    gossipsub, identify, kad, mdns,
+    gossipsub::{self, IdentTopic, Message},
+    identify, kad, mdns,
     swarm::{Swarm, SwarmEvent},
     PeerId,
 };
@@ -19,20 +20,22 @@ pub async fn handle_swarm_event(
     bootstrap_event_sender: &Sender<BootstrapEvent>,
 ) -> Result<()> {
     // if it's a bootstrap event, send the relevant info to the bootstrap function
-    // TODO: first check if the receiving end of this isn't dropped
-    if let Some(bootstrap_event) = BootstrapEvent::try_from_swarm_event(&event) {
-        bootstrap_event_sender.send(bootstrap_event).await.unwrap();
+    if !bootstrap_event_sender.is_closed() {
+        if let Some(bootstrap_event) = BootstrapEvent::try_from_swarm_event(&event) {
+            bootstrap_event_sender.send(bootstrap_event).await.unwrap();
+        }
     }
 
-    handle_common_event(&mut p2p_node.swarm, event)
+    handle_common_event(&mut p2p_node.swarm, p2p_node.topic.clone(), event)
 }
 
 // TODO: is it better to take a mut Swarm here or to send Commands??
 pub fn handle_common_event(
     swarm: &mut Swarm<MyBehaviour>,
+    topic: gossipsub::IdentTopic,
     event: SwarmEvent<MyBehaviourEvent>,
 ) -> Result<()> {
-    let _ = match event {
+    match event {
         SwarmEvent::NewListenAddr { address, .. } => {
             let p2p_address = address.with(Protocol::P2p(*swarm.local_peer_id()));
             info!("Listening on {p2p_address}");
@@ -116,13 +119,7 @@ pub fn handle_common_event(
             message_id: id,
             message,
         })) => {
-            // TODO: rewire this function to work
-            // handle_message(peer_id, message);
-            println!(
-                "Got message: '{}' with id: {id} from peer: {peer_id}",
-                // "{}",
-                String::from_utf8_lossy(&message.data),
-            );
+            handle_message(swarm, message, topic);
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed {
             peer_id,
@@ -195,5 +192,45 @@ pub fn handle_common_event(
         }
         _ => (),
     };
+    Ok(())
+}
+
+// TODO: in the future this function will have a lot more logic to handle message about different
+// subjects (consensus, bootstrapping, mempool)
+fn handle_message(
+    swarm: &mut Swarm<MyBehaviour>,
+    message: Message,
+    topic: IdentTopic,
+) -> Result<()> {
+    let message = String::from_utf8_lossy(&message.data);
+
+    println!(
+        // "Got message: '{}' with id: {id} from peer: {peer_id}",
+        "{}",
+        message
+    );
+
+    // respond to the request if we're a willing relay
+    if let Some(target_peer_id) = message.strip_prefix(WANT_RELAY_FOR_PREFIX) {
+        // FIXME: this doesn't guarentee the peer is listening to us does it?
+        let connected_to_target_peer = swarm.is_connected(&target_peer_id.parse().unwrap());
+        // FIXME: should we make sure the multiaddr isn't a circuit?
+        let is_relay = swarm.behaviour().toggle_relay.is_enabled();
+
+        // broadcast that you're a relay for the target_peer_id
+        if is_relay && connected_to_target_peer {
+            let my_multiaddress = swarm.external_addresses().next().unwrap();
+            let response = format!("{AM_RELAY_FOR_PREFIX}{target_peer_id} {my_multiaddress}");
+
+            if let Err(e) = swarm
+                .behaviour_mut()
+                .gossipsub
+                .publish(topic, response.as_bytes())
+            {
+                warn!("Publish error: {e:?}");
+            }
+        }
+    }
+
     Ok(())
 }
