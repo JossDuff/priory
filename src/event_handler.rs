@@ -85,10 +85,24 @@ pub fn handle_common_event(
             // tracing::info!("Told relay its public address");
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
-            info: identify::Info { observed_addr, .. },
+            info:
+                identify::Info {
+                    observed_addr,
+                    listen_addrs,
+                    ..
+                },
+            peer_id,
             ..
         })) => {
             tracing::info!(address=%observed_addr, "Relay told us our observed address");
+
+            for multiaddr in listen_addrs {
+                swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .add_address(&peer_id, multiaddr);
+            }
+
             swarm.add_external_address(observed_addr);
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {

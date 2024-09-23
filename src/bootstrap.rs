@@ -191,15 +191,6 @@ pub async fn bootstrap_swarm(
         panic!("Couldn't connect to any adress listed as a peer in the config");
     }
 
-    // TODO: should we handle the [`Event::OutboundQueryProgressed{QueryResult::Bootstrap}`]?? Or
-    // at least wait for it to finish.
-    // We should wait for it to finish trying to bootstrap, and for each that it failed to dial (timeout) we
-    // should holepunch to.
-    command_sender
-        .send(BootstrapCommand::KademliaBootstrap)
-        .await
-        .unwrap();
-
     // TODO: failed_to_dial was initially multiaddrs.  We need to get the peerIds somehow.  Maybe
     // we can get them from the relay that claims to know the peer we want to dial?
     let failed_to_dial: Vec<PeerId> = Vec::new();
