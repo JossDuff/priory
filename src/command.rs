@@ -46,7 +46,6 @@ pub enum Command {
     IsRelayEnabled {
         sender: oneshot::Sender<bool>,
     },
-    BootstrapP2pNetwork,
 }
 
 pub fn handle_command(p2p_node: &mut P2pNode, command: Command) -> Result<()> {
@@ -97,10 +96,6 @@ pub fn handle_command(p2p_node: &mut P2pNode, command: Command) -> Result<()> {
             sender
                 .send(swarm.behaviour().toggle_relay.is_enabled())
                 .unwrap();
-        }
-        // Update the status of bootsrapping
-        Command::UpdateBootstrappingStatus { is_bootstrapping } => {
-            p2p_node.is_bootstrapping = is_bootstrapping;
         }
     };
 

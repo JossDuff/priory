@@ -10,6 +10,7 @@ TODO:
 [] remove asserts, panics, and unwraps
 [] all levels of error handling
 [] all levels of tracing logs.  Re-read zero-to-prod logging approach
+[] auto bootstrap when it hits a certain low threshold or receives some error (not enough peers, etc)
 **/
 use futures::{executor::block_on, stream::StreamExt};
 use libp2p::{
@@ -71,7 +72,6 @@ pub struct MyBehaviour {
 pub struct P2pNode {
     swarm: Swarm<MyBehaviour>,
     cfg: Config,
-    is_bootstrapping: bool, // TODO: something to send and receive messages on the gossipsub channel
 }
 
 impl P2pNode {
@@ -80,11 +80,7 @@ impl P2pNode {
         // starts as false, is set to true inside `boostrap_swarm()`
         let is_bootstrapping = false;
 
-        Ok(Self {
-            swarm,
-            cfg,
-            is_bootstrapping,
-        })
+        Ok(Self { swarm, cfg })
     }
 
     pub async fn run(&mut self) -> Result<()> {
@@ -105,7 +101,7 @@ impl P2pNode {
         loop {
             select! {
                 Some(command) = command_receiver.recv() => handle_command(self, command),
-                event = self.swarm.select_next_some() => handle_swarm_event(self, event),
+                event = self.swarm.select_next_some() => handle_swarm_event(self, event, &event_sender).await,
                 // Writing & line stuff is just for debugging & dev
                 Ok(Some(line)) = stdin.next_line() => handle_input_line(&mut self.swarm, line),
             };
@@ -126,6 +122,8 @@ async fn main() -> Result<()> {
         .try_init();
 
     let swarm = build_swarm(&cfg)?;
+
+    Ok(())
 }
 
 fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {

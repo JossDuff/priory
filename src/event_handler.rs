@@ -1,3 +1,4 @@
+use crate::bootstrap::BootstrapEvent;
 use crate::{MyBehaviour, MyBehaviourEvent, P2pNode};
 use anyhow::Result;
 use libp2p::{
@@ -8,17 +9,22 @@ use libp2p::{
     gossipsub, identify, kad, mdns,
     swarm::{Swarm, SwarmEvent},
     PeerId,
-};use tokio::sync::broadcast;
+};
+use tokio::sync::mpsc::{self, Sender};
 use tracing::{info, warn};
 
-pub fn handle_swarm_event(p2p_node: &mut P2pNode,  event:SwarmEvent<MyBehaviourEvent>) -> Result<()> {
-    let (sender, receiver) = broadcast::channel(16);
-
-    match event {
-        cloneable_event=>  
-        // sender.send(event)
-        
+pub async fn handle_swarm_event(
+    p2p_node: &mut P2pNode,
+    event: SwarmEvent<MyBehaviourEvent>,
+    bootstrap_event_sender: &Sender<BootstrapEvent>,
+) -> Result<()> {
+    // if it's a bootstrap event, send the relevant info to the bootstrap function
+    // TODO: first check if the receiving end of this isn't dropped
+    if let Some(bootstrap_event) = BootstrapEvent::try_from_swarm_event(&event) {
+        bootstrap_event_sender.send(bootstrap_event).await.unwrap();
     }
+
+    handle_common_event(&mut p2p_node.swarm, event)
 }
 
 // TODO: is it better to take a mut Swarm here or to send Commands??

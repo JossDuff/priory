@@ -44,21 +44,26 @@ pub enum BootstrapEvent {
 }
 
 impl BootstrapEvent {
-    fn try_from_swarm_event(event: SwarmEvent<MyBehaviourEvent>) -> Option<BootstrapEvent> {
+    pub fn try_from_swarm_event(event: &SwarmEvent<MyBehaviourEvent>) -> Option<BootstrapEvent> {
         match event {
             SwarmEvent::ConnectionEstablished {
                 peer_id, endpoint, ..
-            } => Some(BootstrapEvent::ConnectionEstablished { peer_id, endpoint }),
+            } => Some(BootstrapEvent::ConnectionEstablished {
+                peer_id: peer_id.clone(),
+                endpoint: endpoint.clone(),
+            }),
             SwarmEvent::OutgoingConnectionError { error, .. } => {
-                Some(BootstrapEvent::OutgoingConnectionError { error })
+                Some(BootstrapEvent::OutgoingConnectionError {
+                    error: error.clone(),
+                })
             }
             SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
                 propagation_source,
                 message,
                 ..
             })) => Some(BootstrapEvent::GossipsubMessage {
-                propagation_source,
-                message,
+                propagation_source: propagation_source.clone(),
+                message: message.clone(),
             }),
             SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent { .. })) => {
                 Some(BootstrapEvent::IdentifySent)
@@ -76,21 +81,14 @@ pub async fn bootstrap_swarm(
     command_sender: Sender<Command>,
     event_receiver: &mut Receiver<BootstrapEvent>,
 ) -> Result<()> {
-    // TODO: don't set this in the function cause it can return early because of a '?' and won't
-    // ever be set to false cause it won't reach the end
-    command_sender
-        .send(Command::UpdateBootstrappingStatus {
-            is_bootstrapping: true,
-        })
-        .await
-        .unwrap();
-
     // create a gossipsub topic
     let topic = gossipsub::IdentTopic::new(GOSSIPSUB_TOPIC);
 
     // subscribes to our IdentTopic
     command_sender
-        .send(Command::GossipsubSubscribe { topic })
+        .send(Command::GossipsubSubscribe {
+            topic: topic.clone(),
+        })
         .await
         .unwrap();
 
@@ -283,12 +281,5 @@ pub async fn bootstrap_swarm(
     }
 
     // TODO: connect to some random amount of other nodes ??
-
-    command_sender
-        .send(Command::UpdateBootstrappingStatus {
-            is_bootstrapping: false,
-        })
-        .await
-        .unwrap();
     Ok(())
 }
