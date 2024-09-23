@@ -3,7 +3,7 @@ use libp2p::{multiaddr::Multiaddr, PeerId};
 use serde::Deserialize;
 use std::fs;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     /// If attempting to holepunch, this address will be used as the relay.  
     // TODO: only for development
@@ -53,7 +53,7 @@ fn default_secret_key_seed() -> u8 {
 /// delivered faster, with a better chance of reaching all subscribers and with less chance of any peer disrupting the
 /// network by leaving. However, a high peering degree also causes additional redundant copies of each message to be
 /// sent throughout the network, increasing the bandwidth required to participate in the network.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct GossipsubConnections {
     /// target number of connections.  Gossipsub will try to form this many connections, but will
     /// accept `lower_tolerance` less connections or

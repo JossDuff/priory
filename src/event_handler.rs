@@ -11,7 +11,7 @@ use libp2p::{
 };use tokio::sync::broadcast;
 use tracing::{info, warn};
 
-pub fn handle_swarm_event(&mut Swarm<MyBehaviour>, event:SwarmEvent<MyBehaviourEvent>) -> Result<()> {
+pub fn handle_swarm_event(p2p_node: &mut P2pNode,  event:SwarmEvent<MyBehaviourEvent>) -> Result<()> {
     let (sender, receiver) = broadcast::channel(16);
 
     match event {

@@ -48,8 +48,6 @@ use command::{handle_command, Command};
 mod event_handler;
 use event_handler::handle_swarm_event;
 
-const AM_RELAY_FOR_PREFIX: &str = "AM RELAY FOR ";
-const WANT_RELAY_FOR_PREFIX: &str = "WANT RELAY FOR ";
 const IDENTIFY_PROTOCOL_VERSION: &str = "TODO/0.0.1";
 const CONFIG_FILE_PATH: &str = "priory.toml";
 
@@ -90,22 +88,24 @@ impl P2pNode {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let (sender, mut receiver) = mpsc::channel(100);
+        // TODO: how big should the channels be?
+        let (command_sender, mut command_receiver) = mpsc::channel(16);
+        let (event_sender, mut event_receiver) = mpsc::channel(16);
 
         // Bootstrap this node into the network
+        let cfg = self.cfg.clone();
         tokio::spawn(async move {
-            bootstrap_swarm(&self.cfg, sender.clone()).await;
+            bootstrap_swarm(cfg, command_sender.clone(), &mut event_receiver).await;
         });
 
         // read full lines from stdin
         let mut stdin = io::BufReader::new(io::stdin()).lines();
 
-        let swarm = &self.swarm;
         // let it rip
         loop {
             select! {
-                Some(command) = receiver.recv() => handle_command(&mut self, command),
-                event = swarm.select_next_some() => handle_swarm_event(&mut swarm, event),
+                Some(command) = command_receiver.recv() => handle_command(self, command),
+                event = self.swarm.select_next_some() => handle_swarm_event(self, event),
                 // Writing & line stuff is just for debugging & dev
                 Ok(Some(line)) = stdin.next_line() => handle_input_line(&mut self.swarm, line),
             };

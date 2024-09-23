@@ -72,9 +72,9 @@ impl BootstrapEvent {
 }
 
 pub async fn bootstrap_swarm(
-    cfg: &Config,
+    cfg: Config,
     command_sender: Sender<Command>,
-    event_receiver: Receiver<BootstrapEvent>,
+    event_receiver: &mut Receiver<BootstrapEvent>,
 ) -> Result<()> {
     // TODO: don't set this in the function cause it can return early because of a '?' and won't
     // ever be set to false cause it won't reach the end
@@ -124,13 +124,13 @@ pub async fn bootstrap_swarm(
     let mut failed_to_dial: Vec<Multiaddr> = Vec::new();
 
     // try to dial all peers in config
-    for peer_multiaddr in cfg.peers.clone() {
+    for peer_multiaddr in &cfg.peers.clone() {
         // dial peer
         // if successful add to DHT
         // if failure wait until we've made contact with the dht and find a peer to holepunch
         command_sender
             .send(Command::Dial {
-                multiaddr: peer_multiaddr,
+                multiaddr: peer_multiaddr.clone(),
             })
             .await
             .unwrap();
@@ -152,7 +152,7 @@ pub async fn bootstrap_swarm(
 
                 BootstrapEvent::OutgoingConnectionError { .. } => {
                     // TODO: have to make sure this event is about the node we just dialed
-                    failed_to_dial.push(peer_multiaddr);
+                    failed_to_dial.push(peer_multiaddr.clone());
                     break;
                 }
                 // ignore other events
@@ -188,14 +188,14 @@ pub async fn bootstrap_swarm(
         let query = format!("{WANT_RELAY_FOR_PREFIX}{peer_id}");
         command_sender
             .send(Command::GossipsubPublish {
-                topic: topic.into(),
+                topic: topic.clone().into(),
                 data: query.into(),
             })
             .await
             .unwrap();
 
         // Wait until we hear a response from a relay claiming they know this peer_id (or timeout)
-        let mut relay_address;
+        let relay_address;
         // TODO: timeout, don't have relay_address be mutable
         loop {
             match event_receiver
@@ -231,7 +231,7 @@ pub async fn bootstrap_swarm(
 
         command_sender
             .send(Command::Dial {
-                multiaddr: relay_address,
+                multiaddr: relay_address.clone(),
             })
             .await
             .unwrap();
@@ -265,7 +265,7 @@ pub async fn bootstrap_swarm(
         });
 
         // listen to the dialed relay as well
-        let multiaddr = relay_address.with(Protocol::P2pCircuit);
+        let multiaddr = relay_address.clone().with(Protocol::P2pCircuit);
         command_sender
             .send(Command::ListenOn { multiaddr })
             .await

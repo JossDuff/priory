@@ -46,9 +46,7 @@ pub enum Command {
     IsRelayEnabled {
         sender: oneshot::Sender<bool>,
     },
-    UpdateBootstrappingStatus {
-        is_bootstrapping: bool,
-    },
+    BootstrapP2pNetwork,
 }
 
 pub fn handle_command(p2p_node: &mut P2pNode, command: Command) -> Result<()> {
