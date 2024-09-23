@@ -60,20 +60,24 @@ impl P2pNode {
 
     pub async fn run(&mut self) -> Result<()> {
         // TODO: how big should the channels be?
-        let (command_sender, mut command_receiver) = mpsc::channel(16);
-        let (event_sender, mut event_receiver) = mpsc::channel(16);
+        let (bootstrap_command_sender, mut bootstrap_command_receiver) = mpsc::channel(16);
+        let (bootstrap_event_sender, mut bootstrap_event_receiver) = mpsc::channel(16);
 
         // Bootstrap this node into the network
         let cfg = self.cfg.clone();
         let topic = self.topic.clone();
         tokio::spawn(async move {
-            // TODO: handle result
-            bootstrap_swarm(cfg, command_sender.clone(), &mut event_receiver, topic)
-                .await
-                .unwrap();
+            bootstrap_swarm(
+                cfg,
+                bootstrap_command_sender.clone(),
+                &mut bootstrap_event_receiver,
+                topic,
+            )
+            .await
+            .unwrap();
             // TODO: is this kosher?  We want to drop it when we're done bootstrapping so
             // event_handler doesn't try to send any more events over this channel
-            drop(event_receiver);
+            drop(bootstrap_event_receiver);
         });
 
         // read full lines from stdin
@@ -82,8 +86,8 @@ impl P2pNode {
         // let it rip
         loop {
             select! {
-                Some(command) = command_receiver.recv() => handle_bootstrap_command(self, command).unwrap(),
-                event = self.swarm.select_next_some() => handle_swarm_event(self, event, &event_sender).await.unwrap(),
+                Some(command) = bootstrap_command_receiver.recv() => handle_bootstrap_command(self, command).unwrap(),
+                event = self.swarm.select_next_some() => handle_swarm_event(self, event, &bootstrap_event_sender).await.unwrap(),
                 // Writing & line stuff is just for debugging & dev
                 Ok(Some(line)) = stdin.next_line() => handle_input_line(&mut self.swarm, line).unwrap(),
             };

@@ -5,10 +5,6 @@ use std::fs;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
-    /// If attempting to holepunch, this address will be used as the relay.  
-    // TODO: only for development
-    pub relay_address: Option<Multiaddr>,
-
     /// peers to connect to on startup
     pub peers: Vec<Multiaddr>,
 
@@ -20,10 +16,6 @@ pub struct Config {
     /// By default, is true
     #[serde(default = "default_is_relay")]
     pub is_relay: bool,
-
-    /// Name that appears when sending a message
-    // TODO: only for development
-    pub name: String,
 
     /// The port used to listen on all interfaces
     #[serde(default = "default_port")]
@@ -144,9 +136,7 @@ mod tests {
 
         assert_eq!(cfg.port, 0);
         assert!(cfg.is_relay);
-        assert_eq!(cfg.name, "joss!".to_owned());
         assert_eq!(cfg.secret_key_seed, 1);
-        assert_eq!(cfg.relay_address, Some(Multiaddr::from_str("/ip4/142.93.53.125/tcp/4001/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN").unwrap()));
         assert_eq!(
             cfg.peers,
             vec![Multiaddr::from_str("/ip4/142.93.53.125/tcp/4001/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN").unwrap()]

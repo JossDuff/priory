@@ -81,11 +81,9 @@ pub fn handle_common_event(
         // )) => {
         //     info!("Relay accepted our reservation request");
         // }
-        // SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent {
-        //     ..
-        // })) => {
-        //     // tracing::info!("Told relay its public address");
-        // }
+        SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent { .. })) => {
+            // tracing::info!("Told relay its public address");
+        }
         SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
             info: identify::Info { observed_addr, .. },
             ..
@@ -175,6 +173,13 @@ pub fn handle_common_event(
             }
             kad::QueryResult::StartProviding(Err(err)) => {
                 eprintln!("Failed to put provider record: {err:?}");
+            }
+            kad::QueryResult::Bootstrap(Ok(bootstrap_ok)) => {
+                // yipeee!
+            }
+            kad::QueryResult::Bootstrap(Err(bootstrap_err)) => {
+                // timed out trying to dial this node
+                // TODO: try to hole punch to this node
             }
             _ => {
                 info!("KAD: {:?}", result)

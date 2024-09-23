@@ -193,6 +193,8 @@ pub async fn bootstrap_swarm(
 
     // TODO: should we handle the [`Event::OutboundQueryProgressed{QueryResult::Bootstrap}`]?? Or
     // at least wait for it to finish.
+    // We should wait for it to finish trying to bootstrap, and for each that it failed to dial (timeout) we
+    // should holepunch to.
     command_sender
         .send(BootstrapCommand::KademliaBootstrap)
         .await
