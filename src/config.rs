@@ -9,7 +9,6 @@ pub struct Config {
     // TODO: only for development
     pub relay_address: Option<Multiaddr>,
 
-    // TODO: make this a vec
     /// peers to connect to on startup
     pub peers: Vec<Multiaddr>,
 

@@ -5,7 +5,7 @@ use libp2p::{
         multiaddr::{Multiaddr, Protocol},
         ConnectedPoint, PeerId,
     },
-    gossipsub::{self, Message},
+    gossipsub::{self, IdentTopic, Message, TopicHash},
     identify,
     swarm::SwarmEvent,
 };
@@ -16,9 +16,8 @@ use tokio::{
 };
 use tracing::info;
 
-use crate::command::Command;
 use crate::config::Config;
-use crate::{MyBehaviourEvent, AM_RELAY_FOR_PREFIX, WANT_RELAY_FOR_PREFIX};
+use crate::p2p_node::{MyBehaviourEvent, P2pNode, AM_RELAY_FOR_PREFIX, WANT_RELAY_FOR_PREFIX};
 
 // These are the events that we need some information from during bootstrapping.
 // When encountered in the main thread, the specified data is copied here and the
@@ -65,15 +64,56 @@ impl BootstrapEvent {
     }
 }
 
+pub enum BootstrapCommand {
+    // Gossipsub commands
+    GossipsubPublish { topic: TopicHash, data: Vec<u8> },
+    GossipsubSubscribe { topic: IdentTopic },
+    // Swarm commands
+    Dial { multiaddr: Multiaddr },
+    ListenOn { multiaddr: Multiaddr },
+    // Kademlia commands
+    KademliaBootstrap,
+}
+
+pub fn handle_bootstrap_command(p2p_node: &mut P2pNode, command: BootstrapCommand) -> Result<()> {
+    let swarm = &mut p2p_node.swarm;
+    match command {
+        // Gossipsub commands
+        BootstrapCommand::GossipsubPublish { topic, data } => {
+            swarm
+                .behaviour_mut()
+                .gossipsub
+                .publish(topic, data)
+                .unwrap();
+        }
+        BootstrapCommand::GossipsubSubscribe { topic } => {
+            swarm.behaviour_mut().gossipsub.subscribe(&topic).unwrap();
+        }
+        // Swarm commands
+        BootstrapCommand::Dial { multiaddr } => {
+            swarm.dial(multiaddr).unwrap();
+        }
+        BootstrapCommand::ListenOn { multiaddr } => {
+            swarm.listen_on(multiaddr).unwrap();
+        }
+        // Kademlia commands
+        BootstrapCommand::KademliaBootstrap => {
+            swarm.behaviour_mut().kademlia.bootstrap().unwrap();
+        }
+    };
+
+    Ok(())
+}
+
 pub async fn bootstrap_swarm(
     cfg: Config,
-    command_sender: Sender<Command>,
+    command_sender: Sender<BootstrapCommand>,
     event_receiver: &mut Receiver<BootstrapEvent>,
     topic: gossipsub::IdentTopic,
 ) -> Result<()> {
     // subscribes to our IdentTopic
     command_sender
-        .send(Command::GossipsubSubscribe {
+        .send(BootstrapCommand::GossipsubSubscribe {
             topic: topic.clone(),
         })
         .await
@@ -84,7 +124,7 @@ pub async fn bootstrap_swarm(
         .with(Protocol::from(Ipv4Addr::UNSPECIFIED))
         .with(Protocol::Tcp(cfg.port));
     command_sender
-        .send(Command::ListenOn {
+        .send(BootstrapCommand::ListenOn {
             multiaddr: listen_addr_tcp,
         })
         .await
@@ -95,7 +135,7 @@ pub async fn bootstrap_swarm(
         .with(Protocol::Udp(cfg.port))
         .with(Protocol::QuicV1);
     command_sender
-        .send(Command::ListenOn {
+        .send(BootstrapCommand::ListenOn {
             multiaddr: listen_addr_quic,
         })
         .await
@@ -114,7 +154,7 @@ pub async fn bootstrap_swarm(
         // if successful add to DHT
         // if failure wait until we've made contact with the dht and find a peer to holepunch
         command_sender
-            .send(Command::Dial {
+            .send(BootstrapCommand::Dial {
                 multiaddr: peer_multiaddr.clone(),
             })
             .await
@@ -154,7 +194,7 @@ pub async fn bootstrap_swarm(
     // TODO: should we handle the [`Event::OutboundQueryProgressed{QueryResult::Bootstrap}`]?? Or
     // at least wait for it to finish.
     command_sender
-        .send(Command::KademliaBootstrap)
+        .send(BootstrapCommand::KademliaBootstrap)
         .await
         .unwrap();
 
@@ -172,7 +212,7 @@ pub async fn bootstrap_swarm(
     for peer_id in failed_to_dial {
         let query = format!("{WANT_RELAY_FOR_PREFIX}{peer_id}");
         command_sender
-            .send(Command::GossipsubPublish {
+            .send(BootstrapCommand::GossipsubPublish {
                 topic: topic.clone().into(),
                 data: query.into(),
             })
@@ -209,7 +249,7 @@ pub async fn bootstrap_swarm(
         }
 
         command_sender
-            .send(Command::Dial {
+            .send(BootstrapCommand::Dial {
                 multiaddr: relay_address.clone(),
             })
             .await
@@ -246,7 +286,7 @@ pub async fn bootstrap_swarm(
         // listen to the dialed relay as well
         let multiaddr = relay_address.clone().with(Protocol::P2pCircuit);
         command_sender
-            .send(Command::ListenOn { multiaddr })
+            .send(BootstrapCommand::ListenOn { multiaddr })
             .await
             .unwrap();
 
@@ -255,7 +295,7 @@ pub async fn bootstrap_swarm(
             .with(Protocol::P2pCircuit)
             .with(Protocol::P2p(peer_id));
         command_sender
-            .send(Command::Dial { multiaddr })
+            .send(BootstrapCommand::Dial { multiaddr })
             .await
             .unwrap();
         info!(peer = ?peer_id, "Attempting to hole punch");

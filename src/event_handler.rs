@@ -1,5 +1,7 @@
 use crate::bootstrap::BootstrapEvent;
-use crate::{MyBehaviour, MyBehaviourEvent, P2pNode, AM_RELAY_FOR_PREFIX, WANT_RELAY_FOR_PREFIX};
+use crate::p2p_node::{
+    MyBehaviour, MyBehaviourEvent, P2pNode, AM_RELAY_FOR_PREFIX, WANT_RELAY_FOR_PREFIX,
+};
 use anyhow::Result;
 use libp2p::{
     core::{multiaddr::Protocol, ConnectedPoint},
