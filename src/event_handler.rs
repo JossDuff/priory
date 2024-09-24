@@ -9,8 +9,11 @@ use libp2p::{
     identify, kad, mdns,
     swarm::SwarmEvent,
 };
+use std::collections::HashSet;
 use tokio::sync::mpsc::Sender;
 use tracing::{info, warn};
+
+const RELAY_SERVER_PROTOCOL_ID: &str = "/libp2p/circuit/relay/0.2.0/hop";
 
 pub async fn handle_swarm_event(
     p2p_node: &mut P2pNode,
@@ -83,21 +86,37 @@ pub fn handle_common_event(
         // )) => {
         //     info!("Relay accepted our reservation request");
         // }
+        // we sent information about ourselves to a peer
         SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent { .. })) => {
-            tracing::info!("Told peer its public address");
+            tracing::info!("Sent identify info to a peer");
         }
+        // A peer sent us information about ourselves
         SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
             info:
                 identify::Info {
                     observed_addr,
                     listen_addrs,
+                    protocols,
                     ..
                 },
             peer_id,
             ..
         })) => {
-            tracing::info!(address=%observed_addr, "Peer told us our observed address");
+            tracing::info!(address=%observed_addr, "Received identify info from a peer");
+            // TODO: if we only ever receive this event from peers we're connected to, we can
+            // listen to nodes who claim to be relays
+            for protocol in protocols {
+                // if they have a relay protocol, listen to them and add them to list of relays
+                if protocol == RELAY_SERVER_PROTOCOL_ID {
+                    for relay_multiaddr in &listen_addrs {
+                        let multiaddr = relay_multiaddr.clone().with(Protocol::P2pCircuit);
+                        p2p_node.swarm.listen_on(multiaddr.clone()).unwrap();
+                        p2p_node.add_relay(Peer { multiaddr, peer_id })
+                    }
+                }
+            }
 
+            // add them to kademlia
             for multiaddr in listen_addrs {
                 p2p_node
                     .swarm
@@ -196,10 +215,10 @@ pub fn handle_common_event(
             kad::QueryResult::StartProviding(Err(err)) => {
                 eprintln!("Failed to put provider record: {err:?}");
             }
-            kad::QueryResult::Bootstrap(Ok(bootstrap_ok)) => {
+            kad::QueryResult::Bootstrap(Ok(_bootstrap_ok)) => {
                 // yipeee!
             }
-            kad::QueryResult::Bootstrap(Err(bootstrap_err)) => {
+            kad::QueryResult::Bootstrap(Err(_bootstrap_err)) => {
                 // timed out trying to dial this node
                 // TODO: try to hole punch to this node
             }
@@ -257,7 +276,7 @@ fn handle_message(p2p_node: &mut P2pNode, message: Message, topic: IdentTopic) -
     Ok(())
 }
 
-fn stringify_relays_multiaddr(relays: &[Peer]) -> String {
+fn stringify_relays_multiaddr(relays: &HashSet<Peer>) -> String {
     relays.iter().fold("".to_string(), |acc, relay_peer| {
         format!("{acc} {}", relay_peer.multiaddr)
     })
@@ -274,7 +293,7 @@ mod tests {
         let relays = Vec::new();
         let correct_stringified_relays = "";
         assert_eq!(
-            stringify_relays_multiaddr(&relays),
+            stringify_relays_multiaddr(&relays.into_iter().collect()),
             correct_stringified_relays
         );
 
@@ -286,7 +305,7 @@ mod tests {
 
         let correct_stringified_relays = "/ip4/127.0.0.1/tcp/4001";
         assert_eq!(
-            stringify_relays_multiaddr(&relays),
+            stringify_relays_multiaddr(&relays.into_iter().collect()),
             correct_stringified_relays
         );
 
@@ -304,7 +323,7 @@ mod tests {
 
         let correct_stringified_relays = "/ip4/127.0.0.1/tcp/4001 /ip4/10.48.0.5/tcp/4001";
         assert_eq!(
-            stringify_relays_multiaddr(&relays),
+            stringify_relays_multiaddr(&relays.into_iter().collect()),
             correct_stringified_relays
         );
     }

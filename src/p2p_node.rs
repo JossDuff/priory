@@ -9,7 +9,7 @@ use libp2p::{
 };
 use libp2p_kad::store::MemoryStore;
 use serde::Deserialize;
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::hash::{Hash, Hasher};
 use tokio::{
     io,
@@ -46,7 +46,7 @@ pub struct MyBehaviour {
     // TODO: can use connection_limits::Behaviour to limit connections by a % of max memory
 }
 
-#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct Peer {
     pub multiaddr: Multiaddr,
     pub peer_id: PeerId,
@@ -56,14 +56,15 @@ pub struct P2pNode {
     pub swarm: Swarm<MyBehaviour>,
     pub topic: gossipsub::IdentTopic,
     pub cfg: Config,
-    pub relays: Vec<Peer>,
+    // relays that we're listening on
+    pub relays: HashSet<Peer>,
 }
 
 impl P2pNode {
     pub fn new(cfg: Config) -> Result<Self> {
         let swarm = build_swarm(&cfg)?;
         let topic = gossipsub::IdentTopic::new(GOSSIPSUB_TOPIC);
-        let relays = Vec::new();
+        let relays = HashSet::new();
 
         Ok(Self {
             swarm,
@@ -107,6 +108,10 @@ impl P2pNode {
                 Ok(Some(line)) = stdin.next_line() => handle_input_line(&mut self.swarm, line).unwrap(),
             };
         }
+    }
+
+    pub fn add_relay(&mut self, relay: Peer) {
+        self.relays.insert(relay);
     }
 
     // pub fn send_message()

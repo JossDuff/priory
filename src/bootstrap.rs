@@ -189,6 +189,8 @@ pub async fn bootstrap_swarm(
                     }
                 }
                 BootstrapEvent::OutgoingConnectionError { .. } => {
+                    // TODO: make sure this is an error because the node is behind a firewall (I
+                    // think Transport error?)
                     // TODO: have to make sure this event is about the node we just dialed (how???)
                     failed_to_dial.push(peer.clone());
                     break;
@@ -206,8 +208,6 @@ pub async fn bootstrap_swarm(
 
     // When DHT is all set and nodes know you're a relay, try to find relays for those nodes you
     // failed to dial earlier
-    // FIXME: assuming that the dial failed because its behind a firewall.  Consider other reasons
-    // a dial could fail
     // TODO: These should happen concurrently, each on its own tokio thread that handles all the
     // events.  Or maybe it has a channel that receives events and sends to one thread that handles
     // all events?? Hmmm
