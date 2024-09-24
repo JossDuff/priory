@@ -1,13 +1,13 @@
 use crate::bootstrap::BootstrapEvent;
 use crate::p2p_node::{
-    MyBehaviour, MyBehaviourEvent, P2pNode, AM_RELAY_FOR_PREFIX, WANT_RELAY_FOR_PREFIX,
+    MyBehaviourEvent, P2pNode, Peer, I_HAVE_RELAYS_PREFIX, WANT_RELAY_FOR_PREFIX,
 };
 use anyhow::Result;
 use libp2p::{
     core::{multiaddr::Protocol, ConnectedPoint},
     gossipsub::{self, IdentTopic, Message},
     identify, kad, mdns,
-    swarm::{Swarm, SwarmEvent},
+    swarm::SwarmEvent,
 };
 use tokio::sync::mpsc::Sender;
 use tracing::{info, warn};
@@ -24,18 +24,19 @@ pub async fn handle_swarm_event(
         }
     }
 
-    handle_common_event(&mut p2p_node.swarm, p2p_node.topic.clone(), event)
+    handle_common_event(p2p_node, event)
 }
 
 // TODO: is it better to take a mut Swarm here or to send Commands??
 pub fn handle_common_event(
-    swarm: &mut Swarm<MyBehaviour>,
-    topic: gossipsub::IdentTopic,
+    p2p_node: &mut P2pNode,
     event: SwarmEvent<MyBehaviourEvent>,
 ) -> Result<()> {
+    let topic = p2p_node.topic.clone();
+
     match event {
         SwarmEvent::NewListenAddr { address, .. } => {
-            let p2p_address = address.with(Protocol::P2p(*swarm.local_peer_id()));
+            let p2p_address = address.with(Protocol::P2p(*p2p_node.swarm.local_peer_id()));
             info!("Listening on {p2p_address}");
         }
         SwarmEvent::ConnectionEstablished {
@@ -51,7 +52,8 @@ pub fn handle_common_event(
                 ConnectedPoint::Dialer { address, .. } => address,
                 ConnectedPoint::Listener { send_back_addr, .. } => send_back_addr,
             };
-            swarm
+            p2p_node
+                .swarm
                 .behaviour_mut()
                 .kademlia
                 .add_address(&peer_id, multiaddr);
@@ -82,7 +84,7 @@ pub fn handle_common_event(
         //     info!("Relay accepted our reservation request");
         // }
         SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Sent { .. })) => {
-            // tracing::info!("Told relay its public address");
+            tracing::info!("Told peer its public address");
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received {
             info:
@@ -94,30 +96,36 @@ pub fn handle_common_event(
             peer_id,
             ..
         })) => {
-            tracing::info!(address=%observed_addr, "Relay told us our observed address");
+            tracing::info!(address=%observed_addr, "Peer told us our observed address");
 
             for multiaddr in listen_addrs {
-                swarm
+                p2p_node
+                    .swarm
                     .behaviour_mut()
                     .kademlia
                     .add_address(&peer_id, multiaddr);
             }
 
-            swarm.add_external_address(observed_addr);
+            p2p_node.swarm.add_external_address(observed_addr);
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
             for (peer_id, _multiaddr) in list {
                 // println!("mDNS discovered a new peer: {peer_id}");
                 // Explicit peers are peers that remain connected and we unconditionally
                 // forward messages to, outside of the scoring system.
-                swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                p2p_node
+                    .swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .add_explicit_peer(&peer_id);
                 // swarm.behaviour_mut().kademlia.add_address(&peer_id, multiaddr);
             }
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
             for (peer_id, _multiaddr) in list {
                 // println!("mDNS discovered peer has expired: {peer_id}");
-                swarm
+                p2p_node
+                    .swarm
                     .behaviour_mut()
                     .gossipsub
                     .remove_explicit_peer(&peer_id);
@@ -129,7 +137,7 @@ pub fn handle_common_event(
             message_id: _id,
             message,
         })) => {
-            handle_message(swarm, message, topic).unwrap();
+            handle_message(p2p_node, message, topic).unwrap();
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed {
             peer_id,
@@ -214,11 +222,7 @@ pub fn handle_common_event(
 
 // TODO: in the future this function will have a lot more logic to handle message about different
 // subjects (consensus, bootstrapping, mempool)
-fn handle_message(
-    swarm: &mut Swarm<MyBehaviour>,
-    message: Message,
-    topic: IdentTopic,
-) -> Result<()> {
+fn handle_message(p2p_node: &mut P2pNode, message: Message, topic: IdentTopic) -> Result<()> {
     let message = String::from_utf8_lossy(&message.data);
 
     println!(
@@ -227,19 +231,20 @@ fn handle_message(
         message
     );
 
-    // respond to the request if we're a willing relay
     if let Some(target_peer_id) = message.strip_prefix(WANT_RELAY_FOR_PREFIX) {
-        // FIXME: this doesn't guarentee the peer is listening to us does it?
-        let connected_to_target_peer = swarm.is_connected(&target_peer_id.parse().unwrap());
-        // FIXME: should we make sure the multiaddr isn't a circuit?
-        let is_relay = swarm.behaviour().toggle_relay.is_enabled();
+        let my_peer_id = p2p_node.swarm.local_peer_id().to_string();
 
-        // broadcast that you're a relay for the target_peer_id
-        if is_relay && connected_to_target_peer {
-            let my_multiaddress = swarm.external_addresses().next().unwrap();
-            let response = format!("{AM_RELAY_FOR_PREFIX}{target_peer_id} {my_multiaddress}");
+        if my_peer_id == target_peer_id {
+            // send a response with a relay that you're listening on
 
-            if let Err(e) = swarm
+            // space separated list of multiaddrs of the relays you listen to
+            let relays_i_listen_to = stringify_relays_multiaddr(&p2p_node.relays);
+
+            // TODO: could later make this all relays I listen to
+            let response = format!("{I_HAVE_RELAYS_PREFIX}{my_peer_id} {relays_i_listen_to}");
+
+            if let Err(e) = p2p_node
+                .swarm
                 .behaviour_mut()
                 .gossipsub
                 .publish(topic, response.as_bytes())
@@ -250,4 +255,57 @@ fn handle_message(
     }
 
     Ok(())
+}
+
+fn stringify_relays_multiaddr(relays: &[Peer]) -> String {
+    relays.iter().fold("".to_string(), |acc, relay_peer| {
+        format!("{acc} {}", relay_peer.multiaddr)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use libp2p::PeerId;
+
+    #[test]
+    fn test_stringify_relays() {
+        // none relay
+        let relays = Vec::new();
+        let correct_stringified_relays = "";
+        assert_eq!(
+            stringify_relays_multiaddr(&relays),
+            correct_stringified_relays
+        );
+
+        // one relay
+        let relays = vec![Peer {
+            multiaddr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
+            peer_id: PeerId::random(),
+        }];
+
+        let correct_stringified_relays = "/ip4/127.0.0.1/tcp/4001";
+        assert_eq!(
+            stringify_relays_multiaddr(&relays),
+            correct_stringified_relays
+        );
+
+        // some relays
+        let relays = vec![
+            Peer {
+                multiaddr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
+                peer_id: PeerId::random(),
+            },
+            Peer {
+                multiaddr: "/ip4/10.48.0.5/tcp/4001".parse().unwrap(),
+                peer_id: PeerId::random(),
+            },
+        ];
+
+        let correct_stringified_relays = "/ip4/127.0.0.1/tcp/4001 /ip4/10.48.0.5/tcp/4001";
+        assert_eq!(
+            stringify_relays_multiaddr(&relays),
+            correct_stringified_relays
+        );
+    }
 }

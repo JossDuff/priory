@@ -1,11 +1,14 @@
 use anyhow::Result;
 use futures::stream::StreamExt;
 use libp2p::{
-    dcutr, gossipsub, identify, identity, kad, mdns, noise, relay,
+    dcutr, gossipsub, identify, identity, kad, mdns,
+    multiaddr::Multiaddr,
+    noise, relay,
     swarm::{behaviour::toggle::Toggle, NetworkBehaviour},
-    tcp, yamux, Swarm,
+    tcp, yamux, PeerId, Swarm,
 };
 use libp2p_kad::store::MemoryStore;
+use serde::Deserialize;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use tokio::{
@@ -22,8 +25,9 @@ use crate::event_handler::handle_swarm_event;
 
 const IDENTIFY_PROTOCOL_VERSION: &str = "TODO/0.0.1";
 pub const GOSSIPSUB_TOPIC: &str = "test-net";
+
 pub const WANT_RELAY_FOR_PREFIX: &str = "WANT RELAY FOR ";
-pub const AM_RELAY_FOR_PREFIX: &str = "AM RELAY FOR ";
+pub const I_HAVE_RELAYS_PREFIX: &str = "I HAVE RELAYS ";
 
 // custom network behavious that combines gossipsub and mdns
 #[derive(NetworkBehaviour)]
@@ -42,20 +46,31 @@ pub struct MyBehaviour {
     // TODO: can use connection_limits::Behaviour to limit connections by a % of max memory
 }
 
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub struct Peer {
+    pub multiaddr: Multiaddr,
+    pub peer_id: PeerId,
+}
+
 pub struct P2pNode {
     pub swarm: Swarm<MyBehaviour>,
     pub topic: gossipsub::IdentTopic,
     pub cfg: Config,
+    pub relays: Vec<Peer>,
 }
 
 impl P2pNode {
     pub fn new(cfg: Config) -> Result<Self> {
         let swarm = build_swarm(&cfg)?;
-
-        // create a gossipsub topic
         let topic = gossipsub::IdentTopic::new(GOSSIPSUB_TOPIC);
+        let relays = Vec::new();
 
-        Ok(Self { swarm, topic, cfg })
+        Ok(Self {
+            swarm,
+            topic,
+            cfg,
+            relays,
+        })
     }
 
     pub async fn run(&mut self) -> Result<()> {
