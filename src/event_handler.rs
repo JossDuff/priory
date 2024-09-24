@@ -277,9 +277,10 @@ fn handle_message(p2p_node: &mut P2pNode, message: Message, topic: IdentTopic) -
 }
 
 fn stringify_relays_multiaddr(relays: &HashSet<Peer>) -> String {
-    relays.iter().fold("".to_string(), |acc, relay_peer| {
-        format!("{acc} {}", relay_peer.multiaddr)
-    })
+    let stringified = relays.iter().fold("".to_string(), |acc, relay_peer| {
+        format!("{} {acc}", relay_peer.multiaddr)
+    });
+    stringified.trim().to_string()
 }
 
 #[cfg(test)]
