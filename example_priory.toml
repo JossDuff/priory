@@ -1,7 +1,9 @@
 port = 0
 is_relay = true
 secret_key_seed = 1
-peers = ["12D3KooWQYhTNQdmr3ArTeUHRYzFg94BKyTkoWBDWez9kSCVe2Xo"]
+peers = [
+	{ multiaddr = "/ip4/127.0.0.1/tcp/4001", peer_id = "12D3KooWQYhTNQdmr3ArTeUHRYzFg94BKyTkoWBDWez9kSCVe2Xo" },
+]
 
 [num_gossipsub_connections]
 target_num = 7

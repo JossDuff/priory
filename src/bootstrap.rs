@@ -3,8 +3,7 @@ use futures::executor::block_on;
 use libp2p::{
     core::{
         multiaddr::{Multiaddr, Protocol},
-        transport::DialOpts,
-        ConnectedPoint, PeerId,
+        PeerId,
     },
     gossipsub::{self, IdentTopic, Message, TopicHash},
     identify,
@@ -26,33 +25,21 @@ use crate::p2p_node::{
 // When encountered in the main thread, the specified data is copied here and the
 // event is also handled by the common handler.
 pub enum BootstrapEvent {
-    ConnectionEstablished {
-        peer_id: PeerId,
-        endpoint: ConnectedPoint,
-    },
+    ConnectionEstablished { peer_id: PeerId },
     OutgoingConnectionError,
-    GossipsubMessage {
-        message: Message,
-    },
+    GossipsubMessage { message: Message },
     IdentifySent,
     IdentifyReceived,
-    DcutrConnectionSuccessful {
-        remote_peer_id: PeerId,
-    },
-    DcutrConnectionFailed {
-        remote_peer_id: PeerId,
-    },
+    DcutrConnectionSuccessful { remote_peer_id: PeerId },
+    DcutrConnectionFailed { remote_peer_id: PeerId },
 }
 
 impl BootstrapEvent {
     pub fn try_from_swarm_event(event: &SwarmEvent<MyBehaviourEvent>) -> Option<BootstrapEvent> {
         match event {
-            SwarmEvent::ConnectionEstablished {
-                peer_id, endpoint, ..
-            } => Some(BootstrapEvent::ConnectionEstablished {
-                peer_id: *peer_id,
-                endpoint: endpoint.clone(),
-            }),
+            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                Some(BootstrapEvent::ConnectionEstablished { peer_id: *peer_id })
+            }
             SwarmEvent::OutgoingConnectionError { .. } => {
                 Some(BootstrapEvent::OutgoingConnectionError)
             }

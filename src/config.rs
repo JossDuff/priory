@@ -129,6 +129,7 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
+    use libp2p::{Multiaddr, PeerId};
 
     #[test]
     fn test_parse() {
@@ -139,7 +140,7 @@ mod tests {
         assert_eq!(cfg.secret_key_seed, 1);
         assert_eq!(
             cfg.peers,
-            vec![Multiaddr::from_str("/ip4/142.93.53.125/tcp/4001/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN").unwrap()]
+            vec![Peer { multiaddr: Multiaddr::from_str("/ip4/142.93.53.125/tcp/4001/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN").unwrap(), peer_id: PeerId::from_str("12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN").unwrap()}]
         );
         assert_eq!(cfg.num_gossipsub_connections.mesh_n(), 7);
         assert_eq!(cfg.num_gossipsub_connections.mesh_n_low(), 5);
