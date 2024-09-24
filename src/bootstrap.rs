@@ -284,13 +284,6 @@ pub async fn bootstrap_swarm(
                 }
             });
 
-            // listen to the dialed relay as well
-            let multiaddr = relay_address.clone().with(Protocol::P2pCircuit);
-            command_sender
-                .send(BootstrapCommand::ListenOn { multiaddr })
-                .await
-                .unwrap();
-
             // attempt to hole punch to the node we failed to dial earlier
             let multiaddr = relay_address
                 .with(Protocol::P2pCircuit)

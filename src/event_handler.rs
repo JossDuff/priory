@@ -109,7 +109,10 @@ pub fn handle_common_event(
                 // if they have a relay protocol, listen to them and add them to list of relays
                 if protocol == RELAY_SERVER_PROTOCOL_ID {
                     for relay_multiaddr in &listen_addrs {
-                        let multiaddr = relay_multiaddr.clone().with(Protocol::P2pCircuit);
+                        let multiaddr = relay_multiaddr
+                            .clone()
+                            .with(Protocol::P2pCircuit)
+                            .with(Protocol::P2p(peer_id));
                         p2p_node.swarm.listen_on(multiaddr.clone()).unwrap();
                         p2p_node.add_relay(Peer { multiaddr, peer_id })
                     }
