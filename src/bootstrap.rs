@@ -16,7 +16,7 @@ use tokio::{
 };
 use tracing::info;
 
-use crate::config::Config;
+use crate::config::{Config, Peer};
 use crate::p2p_node::{MyBehaviourEvent, P2pNode, AM_RELAY_FOR_PREFIX, WANT_RELAY_FOR_PREFIX};
 
 // These are the events that we need some information from during bootstrapping.
@@ -71,8 +71,6 @@ pub enum BootstrapCommand {
     // Swarm commands
     Dial { multiaddr: Multiaddr },
     ListenOn { multiaddr: Multiaddr },
-    // Kademlia commands
-    KademliaBootstrap,
 }
 
 pub fn handle_bootstrap_command(p2p_node: &mut P2pNode, command: BootstrapCommand) -> Result<()> {
@@ -95,10 +93,6 @@ pub fn handle_bootstrap_command(p2p_node: &mut P2pNode, command: BootstrapComman
         }
         BootstrapCommand::ListenOn { multiaddr } => {
             swarm.listen_on(multiaddr).unwrap();
-        }
-        // Kademlia commands
-        BootstrapCommand::KademliaBootstrap => {
-            swarm.behaviour_mut().kademlia.bootstrap().unwrap();
         }
     };
 
@@ -146,10 +140,12 @@ pub async fn bootstrap_swarm(
     sleep(Duration::from_secs(1)).await;
 
     // keep track of the nodes that we'll later have to hole punch into
-    let mut failed_to_dial: Vec<Multiaddr> = Vec::new();
+    let mut failed_to_dial: Vec<Peer> = Vec::new();
 
     // try to dial all peers in config
-    for peer_multiaddr in &cfg.peers.clone() {
+    for peer in &cfg.peers.clone() {
+        let peer_multiaddr = &peer.multiaddr;
+
         // dial peer
         // if successful add to DHT
         // if failure wait until we've made contact with the dht and find a peer to holepunch
@@ -177,7 +173,7 @@ pub async fn bootstrap_swarm(
 
                 BootstrapEvent::OutgoingConnectionError { .. } => {
                     // TODO: have to make sure this event is about the node we just dialed
-                    failed_to_dial.push(peer_multiaddr.clone());
+                    failed_to_dial.push(peer.clone());
                     break;
                 }
                 // ignore other events
@@ -191,10 +187,6 @@ pub async fn bootstrap_swarm(
         panic!("Couldn't connect to any adress listed as a peer in the config");
     }
 
-    // TODO: failed_to_dial was initially multiaddrs.  We need to get the peerIds somehow.  Maybe
-    // we can get them from the relay that claims to know the peer we want to dial?
-    let failed_to_dial: Vec<PeerId> = Vec::new();
-
     // When DHT is all set and nodes know you're a relay, try to find relays for those nodes you
     // failed to dial earlier
     // FIXME: assuming that the dial failed because its behind a firewall.  Consider other reasons
@@ -202,7 +194,9 @@ pub async fn bootstrap_swarm(
     // TODO: These should happen concurrently, each on its own tokio thread that handles all the
     // events.  Or maybe it has a channel that receives events and sends to one thread that handles
     // all events?? Hmmm
-    for peer_id in failed_to_dial {
+    for peer in failed_to_dial {
+        let peer_id = peer.peer_id;
+
         let query = format!("{WANT_RELAY_FOR_PREFIX}{peer_id}");
         command_sender
             .send(BootstrapCommand::GossipsubPublish {

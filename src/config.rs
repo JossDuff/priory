@@ -1,12 +1,12 @@
 use anyhow::Result;
-use libp2p::multiaddr::Multiaddr;
+use libp2p::{multiaddr::Multiaddr, PeerId};
 use serde::Deserialize;
 use std::fs;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     /// peers to connect to on startup
-    pub peers: Vec<Multiaddr>,
+    pub peers: Vec<Peer>,
 
     // TODO: only for development
     #[serde(default = "default_secret_key_seed")]
@@ -36,6 +36,14 @@ fn default_is_relay() -> bool {
 
 fn default_secret_key_seed() -> u8 {
     fastrand::u8(0..u8::MAX)
+}
+
+/// the multiaddress of a peer to dial to and the peer_id for hole punching in case the node can't
+/// be dialed
+#[derive(Debug, Deserialize, Clone)]
+pub struct Peer {
+    pub multiaddr: Multiaddr,
+    pub peer_id: PeerId,
 }
 
 /// The number of nodes that gossipsub sends full messages to.
