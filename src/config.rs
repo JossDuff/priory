@@ -6,6 +6,7 @@ use std::fs;
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     /// peers to connect to on startup
+    #[serde(default = "default_peers")]
     pub peers: Vec<Peer>,
 
     // TODO: only for development
@@ -24,6 +25,10 @@ pub struct Config {
     /// The number of nodes that gossipsub sends full messages to
     #[serde(default = "default_gossipsub_connections")]
     pub num_gossipsub_connections: GossipsubConnections,
+}
+
+fn default_peers() -> Vec<Peer> {
+    Vec::new()
 }
 
 fn default_port() -> u16 {

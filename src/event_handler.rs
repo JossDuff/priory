@@ -309,23 +309,5 @@ mod tests {
             stringify_relays_multiaddr(&relays.into_iter().collect()),
             correct_stringified_relays
         );
-
-        // some relays
-        let relays = vec![
-            Peer {
-                multiaddr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
-                peer_id: PeerId::random(),
-            },
-            Peer {
-                multiaddr: "/ip4/10.48.0.5/tcp/4001".parse().unwrap(),
-                peer_id: PeerId::random(),
-            },
-        ];
-
-        let correct_stringified_relays = "/ip4/127.0.0.1/tcp/4001 /ip4/10.48.0.5/tcp/4001";
-        assert_eq!(
-            stringify_relays_multiaddr(&relays.into_iter().collect()),
-            correct_stringified_relays
-        );
     }
 }

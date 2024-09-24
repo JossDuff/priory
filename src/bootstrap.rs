@@ -189,7 +189,7 @@ pub async fn bootstrap_swarm(
     }
 
     // unable to dial any of the nodes
-    if failed_to_dial.len() == cfg.peers.len() {
+    if failed_to_dial.len() == cfg.peers.len() && !cfg.peers.is_empty() {
         panic!("Couldn't connect to any adress listed as a peer in the config");
     }
 

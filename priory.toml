@@ -1,5 +1,8 @@
+peers = [
+	{ multiaddr = "/ip4/142.93.53.125/tcp/4001/", peer_id = "12D3KooWQYhTNQdmr3ArTeUHRYzFg94BKyTkoWBDWez9kSCVe2Xo" },
+	{ multiaddr = "/ip4/142.93.2.49/tcp/4021/", peer_id = "" },
+
+]
 is_relay = false
-name = "joss"
 secret_key_seed = 2
 relay_address = "/ip4/142.93.53.125/tcp/4001/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN"
-peers = "12D3KooWQYhTNQdmr3ArTeUHRYzFg94BKyTkoWBDWez9kSCVe2Xo"
