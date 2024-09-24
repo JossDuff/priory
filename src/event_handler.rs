@@ -111,8 +111,8 @@ pub fn handle_common_event(
                     for relay_multiaddr in &listen_addrs {
                         let multiaddr = relay_multiaddr
                             .clone()
-                            .with(Protocol::P2pCircuit)
-                            .with(Protocol::P2p(peer_id));
+                            .with(Protocol::P2p(peer_id))
+                            .with(Protocol::P2pCircuit);
                         p2p_node.swarm.listen_on(multiaddr.clone()).unwrap();
                         p2p_node.add_relay(Peer { multiaddr, peer_id })
                     }
