@@ -212,16 +212,11 @@ pub async fn bootstrap_swarm(
         }
     }
 
-    // unable to dial any of the nodes
+    // unable to dial any of the peers you listed
     if failed_to_dial.len() == cfg.peers.len() && !cfg.peers.is_empty() {
         panic!("Couldn't connect to any adress listed as a peer in the config");
     }
 
-    // When DHT is all set and nodes know you're a relay, try to find relays for those nodes you
-    // failed to dial earlier
-    // TODO: These should happen concurrently, each on its own tokio thread that handles all the
-    // events.  Or maybe it has a channel that receives events and sends to one thread that handles
-    // all events?? Hmmm
     for peer in failed_to_dial {
         let peer_id = peer.peer_id;
 
@@ -236,7 +231,7 @@ pub async fn bootstrap_swarm(
 
         // Wait until we hear a response from a relay claiming they know this peer_id (or timeout)
         let mut possible_relays: Vec<Multiaddr> = Vec::new();
-        // TODO: add a timeout (in case nobody is connected to this node) and don't have relay_address be mutable
+        // TODO: add a timeout (in case nobody is connected to this node)
         loop {
             if let BootstrapEvent::GossipsubMessage { message, .. } = event_receiver
                 .recv()
@@ -262,6 +257,11 @@ pub async fn bootstrap_swarm(
                     if target_peer_id == peer_id {
                         // add all the relays to the list
                         for multiaddr_str in str.iter().skip(1) {
+                            // skip localhost addrs
+                            if find_ipv4(multiaddr_str) == Some("127.0.0.1".into()) {
+                                continue;
+                            }
+
                             possible_relays.push(multiaddr_str.parse().unwrap());
                         }
                         info!("Found relays for peer {}", peer_id);
@@ -430,6 +430,23 @@ fn compare_relay_lists(
     (common_relays, relays_to_dial)
 }
 
+// extract the ipv4 as a &str from a multiaddr
+fn find_ipv4(multiaddr_str: &str) -> Option<String> {
+    // break it up into protocol & addresses
+    let multiaddr_parts: Vec<&str> = multiaddr_str.split("/").collect();
+
+    // find location of the string "ip4"
+    let ipv4_prefix_index = multiaddr_parts.iter().position(|part| *part == "ip4");
+
+    // the ip follows the prefix "ip4"
+    let ipv4_index = match ipv4_prefix_index {
+        Some(index) => index + 1,
+        None => return None,
+    };
+
+    multiaddr_parts.get(ipv4_index).map(|ipv4| ipv4.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,5 +520,18 @@ mod tests {
         }));
         let multiaddr = "/ip4/142.93.53.125/tcp/4021".parse().unwrap();
         assert!(relays_to_dial.contains(&multiaddr));
+    }
+
+    #[test]
+    fn test_find_ipv4() {
+        assert_eq!(find_ipv4("ip4/1000"), Some("1000".into()));
+
+        assert_eq!(find_ipv4("ip4/1000/abc/hello"), Some("1000".into()));
+
+        assert_eq!(find_ipv4("helllo world/ip4/1000"), Some("1000".into()));
+
+        assert_eq!(find_ipv4("helllo world/"), None);
+
+        assert_eq!(find_ipv4(""), None);
     }
 }
