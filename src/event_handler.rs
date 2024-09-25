@@ -6,7 +6,9 @@ use anyhow::Result;
 use libp2p::{
     core::{multiaddr::Protocol, ConnectedPoint, PeerId},
     gossipsub::{self, IdentTopic, Message},
-    identify, kad, mdns,
+    identify,
+    kad::{self, BootstrapError},
+    mdns,
     swarm::SwarmEvent,
 };
 use std::collections::HashSet;
@@ -20,8 +22,9 @@ pub async fn handle_swarm_event(
     event: SwarmEvent<MyBehaviourEvent>,
     bootstrap_event_sender: &Sender<BootstrapEvent>,
 ) -> Result<()> {
-    // if it's a bootstrap event, send the relevant info to the bootstrap function
+    // make sure we're still bootstrapping
     if !bootstrap_event_sender.is_closed() {
+        // if it's a bootstrap event, send the relevant info to the bootstrap function
         if let Some(bootstrap_event) = BootstrapEvent::try_from_swarm_event(&event) {
             bootstrap_event_sender.send(bootstrap_event).await.unwrap();
         }
@@ -30,7 +33,6 @@ pub async fn handle_swarm_event(
     handle_common_event(p2p_node, event)
 }
 
-// TODO: is it better to take a mut Swarm here or to send Commands??
 pub fn handle_common_event(
     p2p_node: &mut P2pNode,
     event: SwarmEvent<MyBehaviourEvent>,
@@ -227,9 +229,9 @@ pub fn handle_common_event(
             kad::QueryResult::Bootstrap(Ok(_bootstrap_ok)) => {
                 // yipeee!
             }
-            kad::QueryResult::Bootstrap(Err(_bootstrap_err)) => {
-                // timed out trying to dial this node
-                // TODO: try to hole punch to this node
+            kad::QueryResult::Bootstrap(Err(BootstrapError::Timeout { peer, .. })) => {
+                // if we failed to bootstrap to a node, it is most likely behind a firewall
+                // TODO: hole punch to peer
             }
             _ => {
                 info!("KAD: {:?}", result)

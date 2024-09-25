@@ -125,35 +125,7 @@ fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
     identity::Keypair::ed25519_from_bytes(bytes).expect("only errors on wrong length")
 }
 
-// TODO: this is just for dev work
-
 fn handle_input_line(p2p_node: &mut P2pNode, line: String) -> Result<()> {
-    // if let Some(addr) = line.strip_prefix("/bootstrap ") {
-    //     let addr: libp2p::Multiaddr = addr.parse()?;
-    //     swarm.dial(addr.clone())?;
-    //     info!("bootstrapped with address {}", addr);
-    // } else if let Some(addr) = line.strip_prefix("/holepunch ") {
-    //     let remote_peer_id: PeerId = addr.parse()?;
-    //
-    //     let relay_addr = match cfg.relay_address.clone() {
-    //         Some(a) => a,
-    //         None => {
-    //             warn!("attempted to hole punch without supplying a relay server address");
-    //             continue;
-    //         }
-    //     };
-    //
-    //     // Q: will gossipsub auto holepunch for us when a new node joins the network?
-    //     swarm
-    //         .dial(
-    //             relay_addr
-    //                 .clone()
-    //                 .with(Protocol::P2pCircuit)
-    //                 .with(Protocol::P2p(remote_peer_id)),
-    //         )
-    //         .unwrap();
-    // } else {
-    //     let line = format!("{username}: {line}");
     if let Err(e) = p2p_node
         .swarm
         .behaviour_mut()

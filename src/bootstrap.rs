@@ -7,7 +7,7 @@ use libp2p::{
     },
     gossipsub::{self, IdentTopic, Message, TopicHash},
     identify,
-    swarm::SwarmEvent,
+    swarm::{DialError, SwarmEvent},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -32,7 +32,8 @@ use crate::p2p_node::{
 // event is also handled by the common handler.
 pub enum BootstrapEvent {
     ConnectionEstablished { peer_id: PeerId },
-    OutgoingConnectionError,
+    OutgoingConnectionErrorLikelyFirewall,
+    OutgoingConnectionErrorOther,
     GossipsubMessage { message: Message },
     IdentifySent,
     IdentifyReceived,
@@ -46,9 +47,12 @@ impl BootstrapEvent {
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                 Some(BootstrapEvent::ConnectionEstablished { peer_id: *peer_id })
             }
-            SwarmEvent::OutgoingConnectionError { .. } => {
-                Some(BootstrapEvent::OutgoingConnectionError)
-            }
+            SwarmEvent::OutgoingConnectionError { error, .. } => match error {
+                DialError::Transport(_) => {
+                    Some(BootstrapEvent::OutgoingConnectionErrorLikelyFirewall)
+                }
+                _ => Some(BootstrapEvent::OutgoingConnectionErrorOther),
+            },
             SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
                 message,
                 ..
@@ -199,11 +203,13 @@ pub async fn bootstrap_swarm(
                         break;
                     }
                 }
-                BootstrapEvent::OutgoingConnectionError { .. } => {
-                    // TODO: make sure this is an error because the node is behind a firewall (I
-                    // think Transport error?)
+                BootstrapEvent::OutgoingConnectionErrorLikelyFirewall => {
                     // TODO: have to make sure this event is about the node we just dialed (how???)
                     failed_to_dial.push(peer.clone());
+                    break;
+                }
+                BootstrapEvent::OutgoingConnectionErrorOther => {
+                    // TODO: have to make sure this event is about the node we just dialed (how???)
                     break;
                 }
                 // ignore other events
