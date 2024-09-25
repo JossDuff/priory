@@ -4,7 +4,7 @@ use crate::p2p_node::{
 };
 use anyhow::Result;
 use libp2p::{
-    core::{multiaddr::Protocol, ConnectedPoint},
+    core::{multiaddr::Protocol, ConnectedPoint, PeerId},
     gossipsub::{self, IdentTopic, Message},
     identify, kad, mdns,
     swarm::SwarmEvent,
@@ -109,12 +109,18 @@ pub fn handle_common_event(
                 // if they have a relay protocol, listen to them and add them to list of relays
                 if protocol == RELAY_SERVER_PROTOCOL_ID {
                     for relay_multiaddr in &listen_addrs {
-                        let multiaddr = relay_multiaddr
+                        // circuit multiaddr to listen to
+                        let circuit_multiaddr = relay_multiaddr
                             .clone()
                             .with(Protocol::P2p(peer_id))
                             .with(Protocol::P2pCircuit);
-                        p2p_node.swarm.listen_on(multiaddr.clone()).unwrap();
-                        p2p_node.add_relay(Peer { multiaddr, peer_id })
+                        p2p_node.swarm.listen_on(circuit_multiaddr.clone()).unwrap();
+
+                        // non-circuit multiaddr to advertise to others
+                        p2p_node.add_relay(Peer {
+                            multiaddr: relay_multiaddr.clone(),
+                            peer_id,
+                        })
                     }
                 }
             }
@@ -155,11 +161,11 @@ pub fn handle_common_event(
             }
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
-            propagation_source: _peer_id,
+            propagation_source,
             message_id: _id,
             message,
         })) => {
-            handle_message(p2p_node, message, topic).unwrap();
+            handle_message(p2p_node, message, topic, propagation_source).unwrap();
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed {
             peer_id,
@@ -244,14 +250,15 @@ pub fn handle_common_event(
 
 // TODO: in the future this function will have a lot more logic to handle message about different
 // subjects (consensus, bootstrapping, mempool)
-fn handle_message(p2p_node: &mut P2pNode, message: Message, topic: IdentTopic) -> Result<()> {
+fn handle_message(
+    p2p_node: &mut P2pNode,
+    message: Message,
+    topic: IdentTopic,
+    propagation_source: PeerId,
+) -> Result<()> {
     let message = String::from_utf8_lossy(&message.data);
 
-    println!(
-        // "Got message: '{}' with id: {id} from peer: {peer_id}",
-        "{}",
-        message
-    );
+    println!("Got message from peer: {propagation_source}\n{}", message);
 
     if let Some(target_peer_id) = message.strip_prefix(WANT_RELAY_FOR_PREFIX) {
         let my_peer_id = p2p_node.swarm.local_peer_id().to_string();

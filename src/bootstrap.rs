@@ -9,9 +9,15 @@ use libp2p::{
     identify,
     swarm::SwarmEvent,
 };
-use std::net::Ipv4Addr;
+use std::{
+    collections::{HashMap, HashSet},
+    net::Ipv4Addr,
+};
 use tokio::{
-    sync::mpsc::{Receiver, Sender},
+    sync::{
+        mpsc::{Receiver, Sender},
+        oneshot,
+    },
     time::{sleep, Duration},
 };
 use tracing::info;
@@ -69,11 +75,24 @@ impl BootstrapEvent {
 
 pub enum BootstrapCommand {
     // Gossipsub commands
-    GossipsubPublish { topic: TopicHash, data: Vec<u8> },
-    GossipsubSubscribe { topic: IdentTopic },
+    GossipsubPublish {
+        topic: TopicHash,
+        data: Vec<u8>,
+    },
+    GossipsubSubscribe {
+        topic: IdentTopic,
+    },
     // Swarm commands
-    Dial { multiaddr: Multiaddr },
-    ListenOn { multiaddr: Multiaddr },
+    Dial {
+        multiaddr: Multiaddr,
+    },
+    ListenOn {
+        multiaddr: Multiaddr,
+    },
+    // P2p node commands
+    MyRelays {
+        sender: oneshot::Sender<HashSet<Peer>>,
+    },
 }
 
 pub fn handle_bootstrap_command(p2p_node: &mut P2pNode, command: BootstrapCommand) -> Result<()> {
@@ -97,6 +116,10 @@ pub fn handle_bootstrap_command(p2p_node: &mut P2pNode, command: BootstrapComman
         BootstrapCommand::ListenOn { multiaddr } => {
             swarm.listen_on(multiaddr).unwrap();
         }
+        BootstrapCommand::MyRelays { sender } => {
+            let my_relays = p2p_node.relays.clone();
+            sender.send(my_relays).unwrap();
+        }
     };
 
     Ok(())
@@ -108,6 +131,7 @@ pub async fn bootstrap_swarm(
     event_receiver: &mut Receiver<BootstrapEvent>,
     topic: gossipsub::IdentTopic,
 ) -> Result<()> {
+    info!("BOOTSTRAPPING");
     // subscribes to our IdentTopic
     command_sender
         .send(BootstrapCommand::GossipsubSubscribe {
@@ -240,15 +264,47 @@ pub async fn bootstrap_swarm(
                         for multiaddr_str in str.iter().skip(1) {
                             possible_relays.push(multiaddr_str.parse().unwrap());
                         }
+                        info!("Found relays for peer {}", peer_id);
                         break;
                     }
                 }
             }
         }
 
-        let mut holepunch_successful = false;
-        // TODO: we can skip a lot of these steps if we first check if we have any relays in common
+        // first check if we already are connected to any of these relays
+        let (sender, receiver) = oneshot::channel();
+        command_sender
+            .send(BootstrapCommand::MyRelays { sender })
+            .await
+            .unwrap();
+
+        let my_relays = receiver.await.unwrap();
+        let (common_relays, possible_relays) = compare_relay_lists(my_relays, possible_relays);
+
+        for relay in common_relays {
+            let relay_address_with_peer_id = relay.multiaddr.with_p2p(relay.peer_id).unwrap();
+            // attempt to holepunch with one of the relays we know
+            if attempt_holepunch(
+                relay_address_with_peer_id.clone(),
+                peer_id,
+                command_sender.clone(),
+                event_receiver,
+            )
+            .await
+            .unwrap()
+            {
+                info!("\nHOLEPUNCH SUCCESSFUL\n");
+                info!("BOOTSTRAP COMPLETE");
+                return Ok(());
+            }
+        }
+
+        // TODO: we should only attempt to dial the non-common relays
         for relay_address in possible_relays {
+            info!(
+                "Attempting to connect to relay candidate {} for peer {}",
+                relay_address, peer_id
+            );
             command_sender
                 .send(BootstrapCommand::Dial {
                     multiaddr: relay_address.clone(),
@@ -284,49 +340,168 @@ pub async fn bootstrap_swarm(
                 }
             });
 
-            // attempt to hole punch to the node we failed to dial earlier
-            let multiaddr = relay_address
-                .with(Protocol::P2pCircuit)
-                .with(Protocol::P2p(peer_id));
-            command_sender
-                .send(BootstrapCommand::Dial { multiaddr })
-                .await
-                .unwrap();
-            info!(peer = ?peer_id, "Attempting to hole punch");
-
-            loop {
-                match event_receiver
-                    .recv()
-                    .await
-                    .context("event sender shouldn't drop")
-                    .unwrap()
-                {
-                    // dcutr events.  If its successful break out of the for loop, if its a failure
-                    // break out of this loop
-                    BootstrapEvent::DcutrConnectionSuccessful { remote_peer_id } => {
-                        if remote_peer_id == peer_id {
-                            // break out of for loop
-                            holepunch_successful = true;
-                        }
-                    }
-                    BootstrapEvent::DcutrConnectionFailed { remote_peer_id } => {
-                        if remote_peer_id == peer_id {
-                            // break out of this loop
-                            break;
-                        }
-                    }
-
-                    // ignore other events
-                    _ => (),
-                }
-            }
-
-            // break out of the for loop early, we don't need to try every relay
-            if holepunch_successful {
+            // attempt to holepunch to the target peer with the relay we just connected to
+            if attempt_holepunch(
+                relay_address,
+                peer_id,
+                command_sender.clone(),
+                event_receiver,
+            )
+            .await
+            .unwrap()
+            {
+                info!("\nHOLEPUNCH SUCCESSFUL\n");
                 break;
             }
         }
     }
 
+    info!("BOOTSTRAP COMPLETE");
     Ok(())
+}
+
+async fn attempt_holepunch(
+    relay_address: Multiaddr,
+    target_peer_id: PeerId,
+    command_sender: Sender<BootstrapCommand>,
+    event_receiver: &mut Receiver<BootstrapEvent>,
+) -> Result<bool> {
+    // attempt to hole punch to the node we failed to dial earlier
+    let multiaddr = relay_address
+        .with(Protocol::P2pCircuit)
+        .with(Protocol::P2p(target_peer_id));
+
+    command_sender
+        .send(BootstrapCommand::Dial { multiaddr })
+        .await
+        .unwrap();
+    info!(peer = ?target_peer_id, "Attempting to hole punch");
+
+    loop {
+        match event_receiver
+            .recv()
+            .await
+            .context("event sender shouldn't drop")
+            .unwrap()
+        {
+            // dcutr events.  If its successful break out of the for loop, if its a failure
+            // break out of this loop
+            BootstrapEvent::DcutrConnectionSuccessful { remote_peer_id } => {
+                if remote_peer_id == target_peer_id {
+                    return Ok(true);
+                }
+            }
+            BootstrapEvent::DcutrConnectionFailed { remote_peer_id } => {
+                if remote_peer_id == target_peer_id {
+                    // holepunch unsuccessful
+                    return Ok(false);
+                }
+            }
+
+            // ignore other events
+            _ => (),
+        }
+    }
+}
+
+// returns a vector of relays (as peers) that the two lists have in common
+// AND a vector of relays (multiaddr) that we aren't connected with (to dial)
+fn compare_relay_lists(
+    my_relays: HashSet<Peer>,
+    their_relays: Vec<Multiaddr>,
+) -> (Vec<Peer>, Vec<Multiaddr>) {
+    let mut common_relays = Vec::new();
+    let mut relays_to_dial = Vec::new();
+
+    let my_relay_map: HashMap<Multiaddr, Peer> = my_relays
+        .iter()
+        .map(|peer| (peer.multiaddr.clone(), peer.clone()))
+        .collect();
+
+    // Iterate through their_relays once
+    for multiaddr in their_relays.iter() {
+        if let Some(peer) = my_relay_map.get(multiaddr) {
+            common_relays.push(peer.clone());
+        } else {
+            relays_to_dial.push(multiaddr.clone());
+        }
+    }
+
+    (common_relays, relays_to_dial)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compare_same_relay_lists() {
+        let peer_id_a = PeerId::random();
+
+        let my_relays = vec![Peer {
+            multiaddr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
+            peer_id: peer_id_a,
+        }]
+        .into_iter()
+        .collect();
+
+        let their_relays = vec!["/ip4/127.0.0.1/tcp/4001".parse().unwrap()];
+
+        let (common_relays, relays_to_dial) = compare_relay_lists(my_relays, their_relays);
+
+        assert_eq!(common_relays.len(), 1);
+        assert!(relays_to_dial.is_empty());
+        assert!(common_relays.contains(&Peer {
+            multiaddr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
+            peer_id: peer_id_a
+        }));
+    }
+
+    #[test]
+    fn test_empty_my_relay_list() {
+        let my_relays = HashSet::new();
+        let their_relays = vec!["/ip4/127.0.0.1/tcp/4001".parse().unwrap()];
+
+        let (common_relays, relays_to_dial) = compare_relay_lists(my_relays, their_relays);
+
+        assert!(common_relays.is_empty());
+        assert_eq!(relays_to_dial.len(), 1);
+        let multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+        assert!(relays_to_dial.contains(&multiaddr));
+    }
+
+    #[test]
+    fn test_tattered_relay_lists() {
+        let peer_id_a = PeerId::random();
+        let peer_id_b = PeerId::random();
+
+        let my_relays = vec![
+            Peer {
+                multiaddr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
+                peer_id: peer_id_a,
+            },
+            Peer {
+                multiaddr: "/ip4/142.93.2.49/tcp/4021".parse().unwrap(),
+                peer_id: peer_id_b,
+            },
+        ]
+        .into_iter()
+        .collect();
+
+        let their_relays = vec![
+            "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
+            "/ip4/142.93.53.125/tcp/4021".parse().unwrap(),
+        ];
+
+        let (common_relays, relays_to_dial) = compare_relay_lists(my_relays, their_relays);
+
+        assert_eq!(common_relays.len(), 1);
+        assert_eq!(relays_to_dial.len(), 1);
+        assert!(common_relays.contains(&Peer {
+            multiaddr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
+            peer_id: peer_id_a,
+        }));
+        let multiaddr = "/ip4/142.93.53.125/tcp/4021".parse().unwrap();
+        assert!(relays_to_dial.contains(&multiaddr));
+    }
 }

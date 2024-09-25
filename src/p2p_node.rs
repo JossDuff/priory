@@ -18,6 +18,7 @@ use tokio::{
     sync::mpsc::{self},
     time::Duration,
 };
+use tracing::warn;
 
 use crate::bootstrap::{bootstrap_swarm, handle_bootstrap_command};
 use crate::config::Config;
@@ -105,7 +106,7 @@ impl P2pNode {
                 Some(command) = bootstrap_command_receiver.recv() => handle_bootstrap_command(self, command).unwrap(),
                 event = self.swarm.select_next_some() => handle_swarm_event(self, event, &bootstrap_event_sender).await.unwrap(),
                 // Writing & line stuff is just for debugging & dev
-                Ok(Some(line)) = stdin.next_line() => handle_input_line(&mut self.swarm, line).unwrap(),
+                Ok(Some(line)) = stdin.next_line() => handle_input_line(self, line).unwrap(),
             };
         }
     }
@@ -126,7 +127,7 @@ fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
 
 // TODO: this is just for dev work
 
-fn handle_input_line(_swarm: &mut Swarm<MyBehaviour>, _line: String) -> Result<()> {
+fn handle_input_line(p2p_node: &mut P2pNode, line: String) -> Result<()> {
     // if let Some(addr) = line.strip_prefix("/bootstrap ") {
     //     let addr: libp2p::Multiaddr = addr.parse()?;
     //     swarm.dial(addr.clone())?;
@@ -153,13 +154,14 @@ fn handle_input_line(_swarm: &mut Swarm<MyBehaviour>, _line: String) -> Result<(
     //         .unwrap();
     // } else {
     //     let line = format!("{username}: {line}");
-    //     if let Err(e) = swarm
-    //         .behaviour_mut()
-    //         .gossipsub
-    //         .publish(topic.clone(), line.as_bytes())
-    //     {
-    //         warn!("Publish error: {e:?}");
-    //     }
+    if let Err(e) = p2p_node
+        .swarm
+        .behaviour_mut()
+        .gossipsub
+        .publish(p2p_node.topic.clone(), line.as_bytes())
+    {
+        warn!("Publish error: {e:?}");
+    }
     // }
     /*
         let mut args = line.split(' ');
