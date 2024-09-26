@@ -246,9 +246,7 @@ pub async fn handle_common_event(
             kad::QueryResult::StartProviding(Err(err)) => {
                 eprintln!("Failed to put provider record: {err:?}");
             }
-            kad::QueryResult::Bootstrap(Ok(BootstrapOk { peer, .. })) => {
-                p2p_node.swarm.dial(peer).unwrap()
-            }
+            kad::QueryResult::Bootstrap(Ok(BootstrapOk { peer, .. })) => {}
             kad::QueryResult::Bootstrap(Err(BootstrapError::Timeout { peer, .. })) => {
                 // if we failed to bootstrap to a node, it is most likely behind a firewall.  Hole
                 // punch to it
