@@ -1,6 +1,6 @@
 use crate::bootstrap::BootstrapEvent;
 use crate::p2p_node::{
-    MyBehaviourEvent, P2pNode, Peer, I_HAVE_RELAYS_PREFIX, WANT_RELAY_FOR_PREFIX,
+    find_ipv4, MyBehaviourEvent, P2pNode, Peer, I_HAVE_RELAYS_PREFIX, WANT_RELAY_FOR_PREFIX,
 };
 use anyhow::Result;
 use libp2p::{
@@ -111,6 +111,12 @@ pub fn handle_common_event(
                 // if they have a relay protocol, listen to them and add them to list of relays
                 if protocol == RELAY_SERVER_PROTOCOL_ID {
                     for relay_multiaddr in &listen_addrs {
+                        // skip if relay shared their localhost address
+                        if find_ipv4(&relay_multiaddr.to_string()) == Some("127.0.0.1".to_string())
+                        {
+                            continue;
+                        }
+
                         // circuit multiaddr to listen to
                         let circuit_multiaddr = relay_multiaddr
                             .clone()
@@ -139,7 +145,7 @@ pub fn handle_common_event(
             p2p_node.swarm.add_external_address(observed_addr);
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
-            for (peer_id, _multiaddr) in list {
+            for (peer_id, multiaddr) in list {
                 // println!("mDNS discovered a new peer: {peer_id}");
                 // Explicit peers are peers that remain connected and we unconditionally
                 // forward messages to, outside of the scoring system.
@@ -148,7 +154,10 @@ pub fn handle_common_event(
                     .behaviour_mut()
                     .gossipsub
                     .add_explicit_peer(&peer_id);
-                // swarm.behaviour_mut().kademlia.add_address(&peer_id, multiaddr);
+
+                // Dial this known peer so the logic in Identify is executed (add to kademlia,
+                // holepunch, etc)
+                p2p_node.swarm.dial(peer_id).unwrap();
             }
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {

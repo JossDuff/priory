@@ -43,6 +43,7 @@ pub struct MyBehaviour {
     pub identify: identify::Behaviour,
     // hole punching
     pub dcutr: dcutr::Behaviour,
+    // bootstrapping connections
     pub kademlia: kad::Behaviour<MemoryStore>,
     // TODO: can use connection_limits::Behaviour to limit connections by a % of max memory
 }
@@ -296,4 +297,21 @@ fn build_swarm(cfg: &Config) -> Result<Swarm<MyBehaviour>> {
         .build();
 
     Ok(swarm)
+}
+
+// extract the ipv4 as a &str from a multiaddr
+pub fn find_ipv4(multiaddr_str: &str) -> Option<String> {
+    // break it up into protocol & addresses
+    let multiaddr_parts: Vec<&str> = multiaddr_str.split("/").collect();
+
+    // find location of the string "ip4"
+    let ipv4_prefix_index = multiaddr_parts.iter().position(|part| *part == "ip4");
+
+    // the ip follows the prefix "ip4"
+    let ipv4_index = match ipv4_prefix_index {
+        Some(index) => index + 1,
+        None => return None,
+    };
+
+    multiaddr_parts.get(ipv4_index).map(|ipv4| ipv4.to_string())
 }

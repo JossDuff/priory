@@ -24,7 +24,7 @@ use tracing::info;
 
 use crate::config::Config;
 use crate::p2p_node::{
-    MyBehaviourEvent, P2pNode, Peer, I_HAVE_RELAYS_PREFIX, WANT_RELAY_FOR_PREFIX,
+    find_ipv4, MyBehaviourEvent, P2pNode, Peer, I_HAVE_RELAYS_PREFIX, WANT_RELAY_FOR_PREFIX,
 };
 
 // These are the events that we need some information from during bootstrapping.
@@ -434,23 +434,6 @@ fn compare_relay_lists(
     }
 
     (common_relays, relays_to_dial)
-}
-
-// extract the ipv4 as a &str from a multiaddr
-fn find_ipv4(multiaddr_str: &str) -> Option<String> {
-    // break it up into protocol & addresses
-    let multiaddr_parts: Vec<&str> = multiaddr_str.split("/").collect();
-
-    // find location of the string "ip4"
-    let ipv4_prefix_index = multiaddr_parts.iter().position(|part| *part == "ip4");
-
-    // the ip follows the prefix "ip4"
-    let ipv4_index = match ipv4_prefix_index {
-        Some(index) => index + 1,
-        None => return None,
-    };
-
-    multiaddr_parts.get(ipv4_index).map(|ipv4| ipv4.to_string())
 }
 
 #[cfg(test)]
