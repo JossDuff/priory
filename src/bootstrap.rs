@@ -1,31 +1,13 @@
 use anyhow::{Context, Result};
-use futures::executor::block_on;
 use libp2p::{
-    core::{
-        multiaddr::{Multiaddr, Protocol},
-        PeerId,
-    },
-    gossipsub::{self, IdentTopic, Message, TopicHash},
-    identify,
+    core::PeerId,
     swarm::{DialError, SwarmEvent},
 };
-use std::{
-    collections::{HashMap, HashSet},
-    net::Ipv4Addr,
-};
-use tokio::{
-    sync::{
-        mpsc::{Receiver, Sender},
-        oneshot,
-    },
-    time::{sleep, Duration},
-};
+use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::info;
 
 use crate::config::Config;
-use crate::p2p_node::{
-    find_ipv4, MyBehaviourEvent, P2pNode, Peer, I_HAVE_RELAYS_PREFIX, WANT_RELAY_FOR_PREFIX,
-};
+use crate::p2p_node::{MyBehaviourEvent, Peer};
 use crate::swarm_client::SwarmClient;
 
 // These are the events that we need some information from during bootstrapping.

@@ -1,30 +1,19 @@
 use anyhow::{Context, Result};
-use futures::executor::block_on;
 use libp2p::{
     core::{
         multiaddr::{Multiaddr, Protocol},
         PeerId,
     },
-    gossipsub::{self, IdentTopic, Message, TopicHash},
+    gossipsub::{self, Message},
     identify,
-    swarm::{DialError, SwarmEvent},
+    swarm::SwarmEvent,
 };
-use std::{
-    collections::{HashMap, HashSet},
-    net::Ipv4Addr,
-};
-use tokio::{
-    sync::{
-        mpsc::{Receiver, Sender},
-        oneshot,
-    },
-    time::{sleep, Duration},
-};
+use std::collections::{HashMap, HashSet};
+use tokio::sync::mpsc::Receiver;
 use tracing::info;
 
-use crate::config::Config;
 use crate::p2p_node::{
-    find_ipv4, MyBehaviourEvent, P2pNode, Peer, I_HAVE_RELAYS_PREFIX, WANT_RELAY_FOR_PREFIX,
+    find_ipv4, MyBehaviourEvent, Peer, I_HAVE_RELAYS_PREFIX, WANT_RELAY_FOR_PREFIX,
 };
 use crate::swarm_client::SwarmClient;
 
@@ -148,7 +137,7 @@ pub async fn holepunch(
             relay_address_with_target_peer_id.clone(),
             target_peer_id,
             event_receiver,
-            &swarm_client,
+            swarm_client,
         )
         .await
         .unwrap()
@@ -161,7 +150,7 @@ pub async fn holepunch(
     // TODO: we should only attempt to dial the non-common relays
     for relay_address in possible_relays {
         // attempt to holepunch to the target peer with the relay we just connected to
-        if exec_holepunch(relay_address, target_peer_id, event_receiver, &swarm_client)
+        if exec_holepunch(relay_address, target_peer_id, event_receiver, swarm_client)
             .await
             .unwrap()
         {

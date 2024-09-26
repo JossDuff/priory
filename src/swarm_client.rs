@@ -1,31 +1,12 @@
-use anyhow::{Context, Result};
-use futures::executor::block_on;
+use anyhow::Result;
 use libp2p::{
-    core::{
-        multiaddr::{Multiaddr, Protocol},
-        PeerId,
-    },
-    gossipsub::{self, IdentTopic, Message, TopicHash},
-    identify,
-    swarm::{DialError, SwarmEvent},
+    core::multiaddr::Multiaddr,
+    gossipsub::{IdentTopic, TopicHash},
 };
-use std::{
-    collections::{HashMap, HashSet},
-    net::Ipv4Addr,
-};
-use tokio::{
-    sync::{
-        mpsc::{Receiver, Sender},
-        oneshot,
-    },
-    time::{sleep, Duration},
-};
-use tracing::info;
+use std::collections::HashSet;
+use tokio::sync::{mpsc::Sender, oneshot};
 
-use crate::config::Config;
-use crate::p2p_node::{
-    find_ipv4, MyBehaviourEvent, P2pNode, Peer, I_HAVE_RELAYS_PREFIX, WANT_RELAY_FOR_PREFIX,
-};
+use crate::p2p_node::Peer;
 
 #[derive(Clone)]
 pub struct SwarmClient {
@@ -42,22 +23,22 @@ impl SwarmClient {
     }
 
     pub async fn gossipsub_publish(&self, data: String) -> Result<()> {
-        Ok(self
-            .command_sender
+        self.command_sender
             .send(SwarmCommand::GossipsubPublish {
                 topic: self.gossipsub_topic.clone().into(),
                 data: data.into(),
             })
             .await
-            .unwrap())
+            .unwrap();
+        Ok(())
     }
 
     pub async fn dial(&self, multiaddr: Multiaddr) -> Result<()> {
-        Ok(self
-            .command_sender
+        self.command_sender
             .send(SwarmCommand::Dial { multiaddr })
             .await
-            .unwrap())
+            .unwrap();
+        Ok(())
     }
 
     pub async fn my_relays(&self) -> Result<HashSet<Peer>> {

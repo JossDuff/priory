@@ -20,7 +20,7 @@ use tokio::{
     io::AsyncBufReadExt,
     select,
     sync::mpsc::{self, Receiver, Sender},
-    time::{sleep, Duration},
+    time::Duration,
 };
 use tracing::warn;
 

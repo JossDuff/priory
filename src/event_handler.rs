@@ -156,7 +156,7 @@ pub async fn handle_common_event(
             p2p_node.swarm.add_external_address(observed_addr);
         }
         SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
-            for (peer_id, multiaddr) in list {
+            for (peer_id, _multiaddr) in list {
                 // println!("mDNS discovered a new peer: {peer_id}");
                 // Explicit peers are peers that remain connected and we unconditionally
                 // forward messages to, outside of the scoring system.
