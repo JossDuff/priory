@@ -1,28 +1,36 @@
 use anyhow::Result;
-use futures::stream::StreamExt;
+use futures::{executor::block_on, future::FutureExt, stream::StreamExt};
 use libp2p::{
     dcutr, gossipsub, identify, identity, kad, mdns,
-    multiaddr::Multiaddr,
+    multiaddr::{Multiaddr, Protocol},
     noise, relay,
-    swarm::{behaviour::toggle::Toggle, NetworkBehaviour},
+    swarm::{behaviour::toggle::Toggle, NetworkBehaviour, SwarmEvent},
     tcp, yamux, PeerId, Swarm,
 };
+use libp2p_gossipsub::IdentTopic;
 use libp2p_kad::store::MemoryStore;
 use serde::Deserialize;
-use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::hash::{Hash, Hasher};
+use std::{
+    collections::{hash_map::DefaultHasher, HashSet},
+    net::Ipv4Addr,
+};
 use tokio::{
     io,
     io::AsyncBufReadExt,
     select,
-    sync::mpsc::{self},
-    time::Duration,
+    sync::mpsc::{self, Receiver, Sender},
+    time::{sleep, Duration},
 };
 use tracing::warn;
 
-use crate::bootstrap::{bootstrap_swarm, handle_bootstrap_command};
 use crate::config::Config;
 use crate::event_handler::handle_swarm_event;
+use crate::swarm_client::{SwarmClient, SwarmCommand};
+use crate::{
+    bootstrap::{self, BootstrapEvent},
+    holepuncher::{self, HolepunchEvent},
+};
 
 const IDENTIFY_PROTOCOL_VERSION: &str = "TODO/0.0.1";
 pub const GOSSIPSUB_TOPIC: &str = "test-net";
@@ -64,8 +72,8 @@ pub struct P2pNode {
 
 impl P2pNode {
     pub fn new(cfg: Config) -> Result<Self> {
-        let swarm = build_swarm(&cfg)?;
         let topic = gossipsub::IdentTopic::new(GOSSIPSUB_TOPIC);
+        let swarm = build_swarm(&cfg, topic.clone())?;
         let relays = HashSet::new();
 
         Ok(Self {
@@ -77,26 +85,33 @@ impl P2pNode {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        // TODO: how big should the channels be?
-        let (bootstrap_command_sender, mut bootstrap_command_receiver) = mpsc::channel(16);
-        let (bootstrap_event_sender, mut bootstrap_event_receiver) = mpsc::channel(16);
+        // start listening
+        self.listen_on_addrs().await.unwrap();
 
-        // Bootstrap this node into the network
-        let cfg = self.cfg.clone();
-        let topic = self.topic.clone();
-        tokio::spawn(async move {
-            bootstrap_swarm(
-                cfg,
-                bootstrap_command_sender.clone(),
-                &mut bootstrap_event_receiver,
-                topic,
-            )
-            .await
-            .unwrap();
-            // TODO: is this kosher?  We want to drop it when we're done bootstrapping so
-            // event_handler doesn't try to send any more events over this channel
-            drop(bootstrap_event_receiver);
-        });
+        // TODO: how big should the channels be?
+        let (swarm_command_sender, mut swarm_command_receiver) = mpsc::channel(16);
+        let (bootstrap_event_sender, bootstrap_event_receiver) = mpsc::channel(16);
+        let (holepunch_event_sender, holepunch_event_receiver) = mpsc::channel(16);
+        let (holepunch_req_sender, holepunch_req_receiver) = mpsc::channel(16);
+
+        let swarm_client = SwarmClient::new(swarm_command_sender, self.topic.clone());
+
+        // start concurrent process to dial all nodes in the config
+        Self::bootstrap(
+            self.cfg.clone(),
+            bootstrap_event_receiver,
+            holepunch_req_sender.clone(),
+            swarm_client.clone(),
+        )
+        .unwrap();
+
+        // start concurrent process to handle requests to hole punch
+        Self::watch_for_holepunch_request(
+            swarm_client,
+            holepunch_req_receiver,
+            holepunch_event_receiver,
+        )
+        .unwrap();
 
         // read full lines from stdin
         let mut stdin = io::BufReader::new(io::stdin()).lines();
@@ -104,16 +119,119 @@ impl P2pNode {
         // let it rip
         loop {
             select! {
-                Some(command) = bootstrap_command_receiver.recv() => handle_bootstrap_command(self, command).unwrap(),
-                event = self.swarm.select_next_some() => handle_swarm_event(self, event, &bootstrap_event_sender).await.unwrap(),
+                Some(command) = swarm_command_receiver.recv() => self.exec_swarm_command(command).unwrap(),
+                event = self.swarm.select_next_some() => handle_swarm_event(self, event, &bootstrap_event_sender, &holepunch_event_sender, &holepunch_req_sender).await.unwrap(),
                 // Writing & line stuff is just for debugging & dev
                 Ok(Some(line)) = stdin.next_line() => handle_input_line(self, line).unwrap(),
             };
         }
     }
 
+    fn bootstrap(
+        cfg: Config,
+        mut event_receiver: Receiver<BootstrapEvent>,
+        holepunch_req_sender: Sender<PeerId>,
+        swarm_client: SwarmClient,
+    ) -> Result<()> {
+        tokio::spawn(async move {
+            bootstrap::bootstrap(cfg, &mut event_receiver, holepunch_req_sender, swarm_client)
+                .await
+                .unwrap();
+        });
+
+        Ok(())
+    }
+
+    fn watch_for_holepunch_request(
+        swarm_client: SwarmClient,
+        mut receiver: Receiver<PeerId>,
+        mut event_receiver: Receiver<HolepunchEvent>,
+    ) -> Result<()> {
+        tokio::spawn(async move {
+            holepuncher::watch_for_holepunch_request(
+                swarm_client,
+                &mut receiver,
+                &mut event_receiver,
+            )
+            .await
+            .unwrap();
+        });
+
+        Ok(())
+    }
+
+    async fn listen_on_addrs(&mut self) -> Result<()> {
+        // Listen on all interfaces and the specified port
+        let listen_addr_tcp = Multiaddr::empty()
+            .with(Protocol::from(Ipv4Addr::UNSPECIFIED))
+            .with(Protocol::Tcp(self.cfg.port));
+        self.swarm.listen_on(listen_addr_tcp.clone()).unwrap();
+
+        let listen_addr_quic = Multiaddr::empty()
+            .with(Protocol::from(Ipv4Addr::UNSPECIFIED))
+            .with(Protocol::Udp(self.cfg.port))
+            .with(Protocol::QuicV1);
+        self.swarm.listen_on(listen_addr_quic.clone()).unwrap();
+
+        block_on(async {
+            let mut delay = futures_timer::Delay::new(std::time::Duration::from_secs(1)).fuse();
+            let mut listening_on_tcp = false;
+            let mut listening_on_quic = false;
+            loop {
+                futures::select! {
+                    event = self.swarm.next() => {
+                        match event.unwrap() {
+                            SwarmEvent::NewListenAddr { address, .. } => {
+                                if address == listen_addr_tcp {
+                                    listening_on_tcp = true;
+                                } else if address == listen_addr_quic {
+                                    listening_on_quic = true;
+                                }
+
+                                if listening_on_quic && listening_on_tcp {
+                                    break;
+                                }
+                            }
+                            event => panic!("{event:?}"),
+                        }
+                    }
+                    _ = delay => {
+                        // Likely listening on all interfaces now, thus continuing by breaking the loop.
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(())
+    }
+
     pub fn add_relay(&mut self, relay: Peer) {
         self.relays.insert(relay);
+    }
+
+    fn exec_swarm_command(self: &mut P2pNode, command: SwarmCommand) -> Result<()> {
+        let swarm = &mut self.swarm;
+        match command {
+            // Gossipsub commands
+            SwarmCommand::GossipsubPublish { topic, data } => {
+                swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .publish(topic, data)
+                    .unwrap();
+            }
+            // Swarm commands
+            SwarmCommand::Dial { multiaddr } => {
+                swarm.dial(multiaddr).unwrap();
+            }
+            SwarmCommand::MyRelays { sender } => {
+                let my_relays = self.relays.clone();
+                sender.send(my_relays).unwrap();
+            }
+        };
+
+        Ok(())
     }
 
     // pub fn send_message()
@@ -214,11 +332,11 @@ fn handle_input_line(p2p_node: &mut P2pNode, line: String) -> Result<()> {
     Ok(())
 }
 
-fn build_swarm(cfg: &Config) -> Result<Swarm<MyBehaviour>> {
+fn build_swarm(cfg: &Config, topic: IdentTopic) -> Result<Swarm<MyBehaviour>> {
     // deterministically generate a PeerId based on given seed for development ease.
     let local_key: identity::Keypair = generate_ed25519(cfg.secret_key_seed);
 
-    let swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
+    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
         .with_tokio()
         .with_tcp(
             tcp::Config::default(),
@@ -296,6 +414,7 @@ fn build_swarm(cfg: &Config) -> Result<Swarm<MyBehaviour>> {
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
 
+    swarm.behaviour_mut().gossipsub.subscribe(&topic).unwrap();
     Ok(swarm)
 }
 

@@ -20,6 +20,9 @@ use config::Config;
 mod bootstrap;
 mod event_handler;
 
+mod holepuncher;
+mod swarm_client;
+
 mod p2p_node;
 use p2p_node::P2pNode;
 

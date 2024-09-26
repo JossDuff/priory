@@ -1,4 +1,5 @@
 use crate::bootstrap::BootstrapEvent;
+use crate::holepuncher::HolepunchEvent;
 use crate::p2p_node::{
     find_ipv4, MyBehaviourEvent, P2pNode, Peer, I_HAVE_RELAYS_PREFIX, WANT_RELAY_FOR_PREFIX,
 };
@@ -11,6 +12,7 @@ use libp2p::{
     mdns,
     swarm::SwarmEvent,
 };
+use libp2p_kad::BootstrapOk;
 use std::collections::HashSet;
 use tokio::sync::mpsc::Sender;
 use tracing::{info, warn};
@@ -21,21 +23,30 @@ pub async fn handle_swarm_event(
     p2p_node: &mut P2pNode,
     event: SwarmEvent<MyBehaviourEvent>,
     bootstrap_event_sender: &Sender<BootstrapEvent>,
+    holepunch_event_sender: &Sender<HolepunchEvent>,
+    holepunch_req_sender: &Sender<PeerId>,
 ) -> Result<()> {
     // make sure we're still bootstrapping
     if !bootstrap_event_sender.is_closed() {
-        // if it's a bootstrap event, send the relevant info to the bootstrap function
+        // if it's a bootstrap event, send the relevant info to the bootstrap thread
         if let Some(bootstrap_event) = BootstrapEvent::try_from_swarm_event(&event) {
             bootstrap_event_sender.send(bootstrap_event).await.unwrap();
         }
     }
 
-    handle_common_event(p2p_node, event)
+    // if it's an event that holepuncher cares about, send the relevant info to the holepuncher
+    // thread
+    if let Some(holepunch_event) = HolepunchEvent::try_from_swarm_event(&event) {
+        holepunch_event_sender.send(holepunch_event).await.unwrap();
+    }
+
+    handle_common_event(p2p_node, event, holepunch_req_sender).await
 }
 
-pub fn handle_common_event(
+pub async fn handle_common_event(
     p2p_node: &mut P2pNode,
     event: SwarmEvent<MyBehaviourEvent>,
+    holepunch_req_sender: &Sender<PeerId>,
 ) -> Result<()> {
     let topic = p2p_node.topic.clone();
 
@@ -235,12 +246,13 @@ pub fn handle_common_event(
             kad::QueryResult::StartProviding(Err(err)) => {
                 eprintln!("Failed to put provider record: {err:?}");
             }
-            kad::QueryResult::Bootstrap(Ok(_bootstrap_ok)) => {
-                // yipeee!
+            kad::QueryResult::Bootstrap(Ok(BootstrapOk { peer, .. })) => {
+                p2p_node.swarm.dial(peer).unwrap()
             }
             kad::QueryResult::Bootstrap(Err(BootstrapError::Timeout { peer, .. })) => {
-                // if we failed to bootstrap to a node, it is most likely behind a firewall
-                // TODO: hole punch to peer
+                // if we failed to bootstrap to a node, it is most likely behind a firewall.  Hole
+                // punch to it
+                holepunch_req_sender.send(peer).await.unwrap();
             }
             _ => {
                 info!("KAD: {:?}", result)
